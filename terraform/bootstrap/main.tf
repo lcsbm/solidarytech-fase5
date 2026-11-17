@@ -39,7 +39,19 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  repo_subject = "repo:${var.github_repo}:*"
+  github_owner = split("/", var.github_repo)[0]
+  github_repo  = split("/", var.github_repo)[1]
+
+  # Dois formatos porque o GitHub pode emitir o sub com ou sem os IDs numéricos
+  # de owner e repositório — as roles da Fase 4 nesta conta usam a forma com IDs
+  # e funcionaram. Ambos fixam exatamente este repositório; o com IDs ainda
+  # resiste à recriação do repo sob o mesmo nome por outra conta.
+  # Após o primeiro deploy, o evento AssumeRoleWithWebIdentity no CloudTrail
+  # mostra qual dos dois casou: remova o outro.
+  repo_subjects = [
+    "repo:${var.github_repo}:*",
+    "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repo_id}:*",
+  ]
 }
 
 # ── State remoto ──
@@ -119,7 +131,7 @@ data "aws_iam_policy_document" "github_assume_role" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [local.repo_subject]
+      values   = local.repo_subjects
     }
   }
 }

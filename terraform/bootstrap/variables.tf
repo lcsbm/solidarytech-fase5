@@ -16,6 +16,18 @@ variable "github_repo" {
   default     = "lcsbm/solidarytech-fase5"
 }
 
+variable "github_owner_id" {
+  description = "ID numérico do owner no GitHub (GET /users/<owner> → id). Pina a trust ao ID, não só ao nome"
+  type        = string
+  default     = "53958058"
+}
+
+variable "github_repo_id" {
+  description = "ID numérico do repositório (GET /repos/<owner>/<repo> → id)"
+  type        = string
+  default     = "1460863773"
+}
+
 variable "role_prefix" {
   description = "Prefixo das roles de CI/CD. Distinto do usado na Fase 4 para não colidir"
   type        = string
