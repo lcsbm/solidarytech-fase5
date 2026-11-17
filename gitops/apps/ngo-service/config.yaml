@@ -10,7 +10,7 @@ data:
 ---
 # A connection string vive no AWS Secrets Manager e e sincronizada pelo
 # External Secrets Operator — nunca versionada neste repositorio.
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: ngo-service-secrets

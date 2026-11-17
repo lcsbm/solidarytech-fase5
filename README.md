@@ -161,6 +161,29 @@ Um push em `services/**` dispara o `ci.yml`, que testa, escaneia com Trivy, publ
 a imagem no ECR e atualiza a tag no manifesto GitOps. O ArgoCD detecta o commit e
 sincroniza.
 
+### Add-ons do cluster
+
+ArgoCD, ingress-nginx, External Secrets e metrics-server são instalados pelo Terraform
+(`terraform/modules/platform/helm-addons.tf`), não por GitOps — o ArgoCD não tem como
+instalar a si mesmo. Tudo que vem depois deles é entregue pelo ArgoCD.
+
+---
+
+## Como derrubar o ambiente
+
+Manter EKS e RDS ligados fora das janelas de demonstração custa ~US$ 250/mês por
+ambiente. O workflow de destroy existe por razão de FinOps.
+
+*Actions > "Terraform — Destroy" > Run workflow* → escolha o ambiente e digite
+`destroy-prod` ou `destroy-dr` como confirmação.
+
+Duas barreiras impedem um destroy acidental: a confirmação precisa casar com o
+ambiente escolhido no menu (não existe um "DESTROY" genérico), e o job passa pelo
+*environment* protegido do GitHub, que exige aprovação manual.
+
+O bucket de state e as roles de CI/CD **não** são removidos — pertencem ao bootstrap
+e sobrevivem ao ciclo de subir e derrubar a plataforma.
+
 ---
 
 ## Segurança

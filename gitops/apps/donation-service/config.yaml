@@ -10,7 +10,7 @@ data:
   OTEL_SERVICE_NAME: donation-service
   OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector.monitoring.svc.cluster.local:4317
 ---
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: donation-service-secrets

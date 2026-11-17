@@ -8,6 +8,11 @@ output "cluster_endpoint" {
   value       = module.eks.cluster_endpoint
 }
 
+output "cluster_certificate_authority_data" {
+  description = "CA do cluster em base64 — consumido pelo provider helm no root module"
+  value       = module.eks.cluster_certificate_authority_data
+}
+
 output "configure_kubectl" {
   description = "Comando para configurar o kubectl contra este cluster"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
