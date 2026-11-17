@@ -159,9 +159,8 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
     steps:
+      # O GITHUB_TOKEN do job (contents: write) basta — nao e preciso PAT para o push.
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITOPS_TOKEN }}
 
       # OIDC: credenciais temporarias, sem access key estatica no repositorio.
       - name: Autentica na AWS via OIDC
