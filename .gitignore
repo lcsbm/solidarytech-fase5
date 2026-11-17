@@ -1,0 +1,43 @@
+# ── Segredos: NUNCA versionar ──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+kubeconfig
+*-credentials.json
+
+# ── Terraform ──
+# .terraform.lock.hcl NAO entra aqui: deve ser versionado para fixar as versoes
+# dos providers e garantir builds reproduzíveis.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# tfvars podem conter ARNs e CIDRs especificos do ambiente
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Go ──
+/server
+*.exe
+*.test
+
+# ── IDE / SO ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

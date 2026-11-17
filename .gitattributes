@@ -1,0 +1,8 @@
+# Normaliza para LF no repositório. Sem isso, o CRLF do Windows quebra
+# os scripts shell dos workflows e o Python embutido nos ConfigMaps ao
+# serem executados em Linux.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary

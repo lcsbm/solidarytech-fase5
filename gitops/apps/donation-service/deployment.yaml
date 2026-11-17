@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: donation-service
+  namespace: solidarytech
+  annotations:
+    # IRSA: permite publicar na fila SQS sem chaves estaticas.
+    eks.amazonaws.com/role-arn: arn:aws:iam::603727984890:role/solidarytech-production-donation-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: donation-service
+  namespace: solidarytech
+  labels:
+    app: donation-service
+    app.kubernetes.io/part-of: solidarytech
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: donation-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: donation-service
+    spec:
+      serviceAccountName: donation-service
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # Hot Path sob SLO: fica nos nos On-Demand. Sem toleration para Spot,
+      # o scheduler nunca o coloca em um no que a AWS pode interromper.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values: ["critical"]
+        # Espalha as replicas entre nos distintos: a perda de um no nao derruba o servico.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: donation-service
+      containers:
+        - name: donation-service
+          image: 603727984890.dkr.ecr.us-east-1.amazonaws.com/solidarytech/donation-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: donation-service-config
+            - secretRef:
+                name: donation-service-secrets
+          # Rightsizing (FinOps): limite maior que os demais por ser o caminho critico.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+# Garante que uma drenagem de no nunca deixe o Hot Path sem replica.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: donation-service
+  namespace: solidarytech
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: donation-service
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: donation-service
+  namespace: solidarytech
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: donation-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # Picos de doacao apos exposicao na midia exigem resposta rapida.
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300

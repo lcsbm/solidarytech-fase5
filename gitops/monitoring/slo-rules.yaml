@@ -1,0 +1,190 @@
+# SLOs do donation-service (Hot Path da SolidaryTech).
+#
+# SLI 1 — Disponibilidade: fracao de requisicoes que NAO retornam 5xx.
+# SLI 2 — Latencia:        fracao de requisicoes atendidas em ate 500ms.
+#
+# SLO para ambos: 99,9% em janela de 30 dias.
+# Error budget correspondente: 0,1% => ~43 minutos de falha por mes.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: donation-service-slo
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    # ── Recording rules: SLIs em multiplas janelas ──
+    # Pre-calculadas para o dashboard responder rapido e para as queries
+    # de burn rate nao se repetirem em cada alerta.
+    - name: donation-service-sli
+      interval: 30s
+      rules:
+        # Disponibilidade = 1 - (taxa de 5xx / taxa total)
+        - record: slo:donation_availability:ratio_rate5m
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{service="donation-service", status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_requests_total{service="donation-service"}[5m])), 1e-9)
+            )
+
+        - record: slo:donation_availability:ratio_rate1h
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{service="donation-service", status=~"5.."}[1h]))
+              /
+              clamp_min(sum(rate(http_requests_total{service="donation-service"}[1h])), 1e-9)
+            )
+
+        - record: slo:donation_availability:ratio_rate6h
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{service="donation-service", status=~"5.."}[6h]))
+              /
+              clamp_min(sum(rate(http_requests_total{service="donation-service"}[6h])), 1e-9)
+            )
+
+        - record: slo:donation_availability:ratio_rate30d
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{service="donation-service", status=~"5.."}[30d]))
+              /
+              clamp_min(sum(rate(http_requests_total{service="donation-service"}[30d])), 1e-9)
+            )
+
+        # Latencia = fracao de requisicoes dentro do bucket le="0.5" (500ms)
+        - record: slo:donation_latency:ratio_rate5m
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{service="donation-service", le="0.5"}[5m]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{service="donation-service"}[5m])), 1e-9)
+
+        - record: slo:donation_latency:ratio_rate1h
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{service="donation-service", le="0.5"}[1h]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{service="donation-service"}[1h])), 1e-9)
+
+        - record: slo:donation_latency:ratio_rate30d
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{service="donation-service", le="0.5"}[30d]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{service="donation-service"}[30d])), 1e-9)
+
+        # P99 observado — numero que a diretoria enxerga no dashboard.
+        - record: slo:donation_latency_p99:seconds
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (rate(http_request_duration_seconds_bucket{service="donation-service"}[5m]))
+            )
+
+        # Error budget restante (0 a 1). Em 1 o orcamento esta intacto;
+        # em 0 o SLO de 30 dias foi integralmente consumido.
+        - record: slo:donation_availability:error_budget_remaining
+          expr: |
+            clamp_min(
+              1 - ((1 - slo:donation_availability:ratio_rate30d) / 0.001),
+              0
+            )
+
+        - record: slo:donation_latency:error_budget_remaining
+          expr: |
+            clamp_min(
+              1 - ((1 - slo:donation_latency:ratio_rate30d) / 0.001),
+              0
+            )
+
+    # ── Alertas de burn rate (multi-window, Google SRE Workbook) ──
+    # Duas janelas por severidade evitam alertas falsos de picos curtos:
+    # o alerta so dispara se a janela longa E a curta estiverem queimando.
+    - name: donation-service-slo-burn
+      rules:
+        # 14,4x => consome o orcamento de 30 dias em ~2 dias. Pagina o on-call.
+        - alert: DonationServiceErrorBudgetBurnFast
+          expr: |
+            (1 - slo:donation_availability:ratio_rate1h) > (14.4 * 0.001)
+            and
+            (1 - slo:donation_availability:ratio_rate5m) > (14.4 * 0.001)
+          for: 2m
+          labels:
+            severity: critical
+            service: donation-service
+            slo: availability
+          annotations:
+            summary: "Queima acelerada do error budget do donation-service"
+            description: >-
+              A taxa de erro das ultimas 1h esta 14,4x acima do permitido pelo SLO de 99,9%.
+              Mantido esse ritmo, o orcamento mensal se esgota em cerca de 2 dias.
+            runbook_url: "https://github.com/lcsbm/solidarytech-fase5/blob/main/docs/PCN.md"
+
+        # 6x => consome o orcamento em ~5 dias. Abre ticket, nao pagina.
+        - alert: DonationServiceErrorBudgetBurnSlow
+          expr: |
+            (1 - slo:donation_availability:ratio_rate6h) > (6 * 0.001)
+            and
+            (1 - slo:donation_availability:ratio_rate1h) > (6 * 0.001)
+          for: 15m
+          labels:
+            severity: warning
+            service: donation-service
+            slo: availability
+          annotations:
+            summary: "Queima sustentada do error budget do donation-service"
+            description: >-
+              A taxa de erro das ultimas 6h esta 6x acima do permitido pelo SLO.
+              O orcamento mensal se esgota em cerca de 5 dias nesse ritmo.
+
+        - alert: DonationServiceLatencySLOBreach
+          expr: slo:donation_latency:ratio_rate1h < 0.999
+          for: 10m
+          labels:
+            severity: warning
+            service: donation-service
+            slo: latency
+          annotations:
+            summary: "SLO de latencia do donation-service violado"
+            description: >-
+              Menos de 99,9% das requisicoes da ultima hora foram atendidas em ate 500ms.
+              P99 atual: {{ $value | humanizeDuration }}.
+
+        - alert: DonationServiceErrorBudgetExhausted
+          expr: slo:donation_availability:error_budget_remaining <= 0
+          for: 5m
+          labels:
+            severity: critical
+            service: donation-service
+            slo: availability
+          annotations:
+            summary: "Error budget do donation-service esgotado"
+            description: >-
+              O orcamento de erro de 30 dias foi totalmente consumido.
+              Congelar deploys de feature e priorizar confiabilidade.
+
+    # ── Disponibilidade basica dos 3 servicos ──
+    - name: solidarytech-availability
+      rules:
+        - alert: ServiceDown
+          expr: |
+            sum by (deployment) (
+              kube_deployment_status_replicas_available{namespace="solidarytech"}
+            ) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Servico {{ $labels.deployment }} sem replicas disponiveis"
+            description: >-
+              O deployment {{ $labels.deployment }} esta sem nenhuma replica pronta
+              ha mais de 1 minuto.
+
+        - alert: PodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="solidarytech"}[10m]) * 600 > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} em CrashLoopBackOff"
+            description: "O pod {{ $labels.pod }} reiniciou mais de 3 vezes nos ultimos 10 minutos."

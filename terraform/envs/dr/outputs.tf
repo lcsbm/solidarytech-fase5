@@ -1,0 +1,23 @@
+output "cluster_name" {
+  value = module.platform.cluster_name
+}
+
+output "configure_kubectl" {
+  value = module.platform.configure_kubectl
+}
+
+output "rds_endpoints" {
+  value = module.platform.rds_endpoints
+}
+
+output "dynamodb_table_name" {
+  value = module.platform.dynamodb_table_name
+}
+
+output "sqs_queue_url" {
+  value = module.platform.sqs_queue_url
+}
+
+output "irsa_role_arns" {
+  value = module.platform.irsa_role_arns
+}

@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngo-service
+  namespace: solidarytech
+  labels:
+    app: ngo-service
+spec:
+  type: ClusterIP
+  selector:
+    app: ngo-service
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+---
+# Faz o Prometheus coletar as Golden Metrics expostas em /metrics.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ngo-service
+  namespace: solidarytech
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: ngo-service
+  namespaceSelector:
+    matchNames:
+      - solidarytech
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

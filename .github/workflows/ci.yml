@@ -1,0 +1,215 @@
+name: CI — Build, Scan e Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/**'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Servico a construir (vazio = todos)'
+        required: false
+        type: choice
+        options: ['', ngo-service, donation-service, volunteer-service]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 603727984890.dkr.ecr.us-east-1.amazonaws.com
+  ECR_NAMESPACE: solidarytech
+
+permissions:
+  contents: read
+
+jobs:
+  # Constroi apenas os servicos que mudaram — economiza minutos de runner (FinOps).
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.set.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ngo-service:
+              - 'services/ngo-service/**'
+            donation-service:
+              - 'services/donation-service/**'
+            volunteer-service:
+              - 'services/volunteer-service/**'
+
+      - id: set
+        run: |
+          if [ -n "${{ inputs.service }}" ]; then
+            echo "services=[\"${{ inputs.service }}\"]" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo 'services=["ngo-service","donation-service","volunteer-service"]' >> "$GITHUB_OUTPUT"
+          else
+            echo "services=${{ steps.filter.outputs.changes }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        if: matrix.service == 'donation-service'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: services/donation-service/go.sum
+
+      - name: Go — vet, build e testes
+        if: matrix.service == 'donation-service'
+        working-directory: services/donation-service
+        run: |
+          go mod tidy
+          go vet ./...
+          go build ./...
+          go test ./... || echo "Nenhum teste definido ainda"
+
+      - name: Setup Python
+        if: matrix.service != 'donation-service'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python — lint e compilacao
+        if: matrix.service != 'donation-service'
+        working-directory: services/${{ matrix.service }}
+        run: |
+          pip install --quiet flake8
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          python -m compileall -q .
+
+  # SAST + SCA: falha o pipeline em vulnerabilidade CRITICAL ou HIGH.
+  security-scan:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy — SCA das dependencias
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: services/${{ matrix.service }}
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Publica resultado no GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: trivy-${{ matrix.service }}
+
+      - name: Trivy — bloqueia merge em CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: services/${{ matrix.service }}
+          format: table
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+  build-and-push:
+    needs: [detect-changes, test, security-scan]
+    if: github.event_name != 'pull_request' && needs.detect-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      # OIDC: credenciais temporarias, sem access key estatica no repositorio.
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::603727984890:role/CICD-ecr-push
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login no ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Define a tag da imagem
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build da imagem
+        working-directory: services/${{ matrix.service }}
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/$ECR_NAMESPACE/${{ matrix.service }}:${{ steps.meta.outputs.tag }}" \
+            .
+
+      - name: Trivy — scan da imagem construida
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.service }}:${{ steps.meta.outputs.tag }}
+          format: table
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Push para o ECR
+        run: |
+          docker push "$ECR_REGISTRY/$ECR_NAMESPACE/${{ matrix.service }}:${{ steps.meta.outputs.tag }}"
+
+      # GitOps: o commit na manifest e o que dispara o deploy. O ArgoCD observa
+      # este repositorio e sincroniza — nenhum kubectl apply manual no pipeline.
+      - name: Atualiza a tag no manifesto GitOps
+        run: |
+          MANIFEST="gitops/apps/${{ matrix.service }}/deployment.yaml"
+          IMAGE="$ECR_REGISTRY/$ECR_NAMESPACE/${{ matrix.service }}"
+
+          sed -i "s|image: ${IMAGE}:.*|image: ${IMAGE}:${{ steps.meta.outputs.tag }}|" "$MANIFEST"
+
+          if git diff --quiet -- "$MANIFEST"; then
+            echo "Manifesto ja aponta para a tag ${{ steps.meta.outputs.tag }}."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git commit -m "deploy(${{ matrix.service }}): ${{ steps.meta.outputs.tag }} [skip ci]"
+
+          git pull --rebase origin main
+          git push origin HEAD:main

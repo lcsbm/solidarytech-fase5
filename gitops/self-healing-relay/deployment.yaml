@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: self-healing-relay
+  namespace: monitoring
+data:
+  relay.py: |
+    """
+    Self-Healing Relay — recebe o webhook do Grafana e dispara o workflow de
+    remediacao no GitHub Actions.
+
+    Diferente de um disparo fixo, o servico a reiniciar vem do label `service` do
+    alerta, validado contra uma allowlist: um webhook arbitrario nao consegue
+    reiniciar um deployment qualquer do cluster.
+    """
+    import json
+    import os
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+    GITHUB_REPO = os.environ.get("GITHUB_REPO", "lcsbm/solidarytech-fase5")
+    NAMESPACE = os.environ.get("TARGET_NAMESPACE", "solidarytech")
+
+    GITHUB_URL = (
+        f"https://api.github.com/repos/{GITHUB_REPO}"
+        "/actions/workflows/self-healing.yml/dispatches"
+    )
+
+    # Apenas estes deployments podem ser reiniciados pela automacao.
+    ALLOWED_SERVICES = {"ngo-service", "donation-service", "volunteer-service"}
+
+    DEFAULT_SERVICE = "donation-service"
+
+
+    def extract_service(alert: dict) -> str | None:
+        """Le o label `service` do payload do Grafana e valida contra a allowlist."""
+        labels = alert.get("commonLabels") or {}
+        service = labels.get("service")
+
+        if not service:
+            for item in alert.get("alerts") or []:
+                service = (item.get("labels") or {}).get("service")
+                if service:
+                    break
+
+        if not service:
+            service = DEFAULT_SERVICE
+
+        if service not in ALLOWED_SERVICES:
+            print(f"Servico '{service}' fora da allowlist — disparo recusado.")
+            return None
+
+        return service
+
+
+    class RelayHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+
+            try:
+                alert = json.loads(body)
+            except json.JSONDecodeError as e:
+                print(f"Payload invalido: {e}")
+                self._respond(400)
+                return
+
+            status = alert.get("status", "unknown")
+            print(f"Alerta recebido — status: {status}")
+
+            # Sem este filtro, o alerta dispararia de novo ao ser resolvido.
+            if status != "firing":
+                print("Status diferente de 'firing' — ignorado.")
+                self._respond(200)
+                return
+
+            service = extract_service(alert)
+            if service is None:
+                self._respond(403)
+                return
+
+            payload = json.dumps({
+                "ref": "main",
+                "inputs": {"service": service, "namespace": NAMESPACE},
+            }).encode()
+
+            req = urllib.request.Request(
+                GITHUB_URL,
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json",
+                },
+            )
+
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    print(f"Workflow disparado para '{service}' — HTTP {resp.status}")
+                self._respond(204)
+            except Exception as e:
+                print(f"Falha ao disparar o workflow: {e}")
+                self._respond(502)
+
+        def do_GET(self):
+            if self.path == "/health":
+                self._respond(200)
+            else:
+                self._respond(404)
+
+        def _respond(self, code):
+            self.send_response(code)
+            self.end_headers()
+
+        def log_message(self, fmt, *args):
+            pass  # silencia o log padrao do BaseHTTPRequestHandler
+
+
+    if __name__ == "__main__":
+        port = int(os.environ.get("PORT", 8080))
+        print(f"Self-healing relay ouvindo em :{port} (namespace alvo: {NAMESPACE})")
+        HTTPServer(("", port), RelayHandler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: self-healing-relay
+  namespace: monitoring
+  labels:
+    app: self-healing-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: self-healing-relay
+  template:
+    metadata:
+      labels:
+        app: self-healing-relay
+      annotations:
+        # Forca o rollout quando o script muda — sem isso o pod segue com a versao antiga.
+        checksum/relay: "4dc7240408f9d86a"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relay
+          image: python:3.12-alpine
+          command: ["python", "/app/relay.py"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: GITHUB_REPO
+              value: lcsbm/solidarytech-fase5
+            - name: TARGET_NAMESPACE
+              value: solidarytech
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-github-pat
+                  key: GITHUB_PAT
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: script
+          configMap:
+            name: self-healing-relay
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: self-healing-relay
+  namespace: monitoring
+spec:
+  selector:
+    app: self-healing-relay
+  ports:
+    - port: 80
+      targetPort: http

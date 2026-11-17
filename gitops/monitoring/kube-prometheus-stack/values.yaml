@@ -1,0 +1,172 @@
+# kube-prometheus-stack — valores para o cluster SolidaryTech
+# Inclui: Prometheus, Alertmanager, Grafana, kube-state-metrics, node-exporter
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    # Scrape todos os ServiceMonitors do cluster, não só do namespace monitoring
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: gp3
+          resources:
+            requests:
+              storage: 20Gi
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+grafana:
+  enabled: true
+  # Credenciais lidas do AWS Secrets Manager via ExternalSecret → grafana-admin-secret
+  admin:
+    existingSecret: grafana-admin-secret
+    userKey: admin-user
+    passwordKey: admin-password
+  # Injeta credenciais de alerting e self-healing como env vars no container Grafana
+  extraEnvFrom:
+    - secretRef:
+        name: grafana-alerting-secrets
+    - secretRef:
+        name: grafana-github-pat
+  extraSecretMounts:
+    - name: grafana-contactpoints
+      secretName: grafana-contactpoints
+      mountPath: /etc/grafana/provisioning/alerting/contactpoints.yaml
+      subPath: contactpoints.yaml
+      readOnly: true
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: monitoring
+      label: grafana_dashboard
+      labelValue: "1"
+    datasources:
+      enabled: true
+      searchNamespace: monitoring
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki-stack.monitoring.svc.cluster.local:3100
+      access: proxy
+      isDefault: false
+      jsonData:
+        manageAlerts: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # ── Alerting provisioning ──────────────────────────────────────────────────
+  # contactpoints.yaml e montado via extraSecretMounts (ExternalSecret grafana-contactpoints)
+  # para evitar problemas de interpolacao de env vars no Grafana Alerting provisioner
+  alerting:
+    policies.yaml:
+      apiVersion: 1
+      policies:
+        - orgId: 1
+          receiver: Discord
+          groupBy: [alertname, severity]
+          groupWait: 30s
+          groupInterval: 5m
+          repeatInterval: 4h
+          routes:
+            - receiver: PagerDuty
+              matchers:
+                - severity = critical
+              continue: true
+            - receiver: Self-Healing
+              matchers:
+                - severity = critical
+              continue: true
+            - receiver: Discord
+              matchers:
+                - alertname =~ ".*"
+
+    rules.yaml:
+      apiVersion: 1
+      groups:
+        - orgId: 1
+          name: solidarytech-availability
+          folder: SolidaryTech
+          interval: 1m
+          rules:
+            # Hot Path da plataforma: sem réplicas, nenhuma doação é processada.
+            # Dispara o contact point Self-Healing, que reinicia o deployment via
+            # GitHub Actions — é o mecanismo que sustenta o MTTR declarado.
+            - uid: donation-service-down
+              title: "donation-service sem réplicas disponíveis"
+              condition: threshold
+              data:
+                - refId: replicas
+                  relativeTimeRange:
+                    from: 300
+                    to: 0
+                  datasourceUid: prometheus
+                  model:
+                    expr: kube_deployment_status_replicas_available{deployment="donation-service",namespace="solidarytech"}
+                    refId: replicas
+                - refId: threshold
+                  datasourceUid: __expr__
+                  model:
+                    type: classic_conditions
+                    refId: threshold
+                    conditions:
+                      - evaluator:
+                          type: lt
+                          params: [1]
+                        operator:
+                          type: and
+                        query:
+                          params: [replicas]
+                        reducer:
+                          type: last
+              noDataState: Alerting
+              execErrState: Alerting
+              for: 0m
+              labels:
+                severity: critical
+                team: platform
+                service: donation-service
+              annotations:
+                summary: "donation-service com 0 réplicas disponíveis"
+                description: "O Hot Path de doações está fora do ar. Self-healing iniciado."
+                runbook: "https://github.com/lcsbm/solidarytech-fase5/blob/main/docs/PCN.md"
+
+# kube-state-metrics — expõe métricas dos objetos K8s
+kube-state-metrics:
+  enabled: true
+
+# node-exporter — métricas dos nós
+prometheus-node-exporter:
+  enabled: true
+
+# Desabilitar componentes que já gerenciamos
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

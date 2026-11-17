@@ -1,0 +1,15 @@
+Flask==3.0.3
+Werkzeug==3.0.3
+psycopg2-binary==2.9.9
+gunicorn==22.0.0
+python-dotenv==1.0.1
+
+# Observabilidade — métricas Prometheus (SLI/SLO)
+prometheus-client==0.21.0
+
+# Observabilidade — tracing distribuído (OTel -> Collector -> New Relic)
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-grpc==1.29.0
+opentelemetry-instrumentation-flask==0.50b0
+opentelemetry-instrumentation-psycopg2==0.50b0
+opentelemetry-instrumentation-requests==0.50b0

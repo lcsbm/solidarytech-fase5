@@ -1,0 +1,362 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-sre-slo
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  sre-slo.json: |
+    {
+      "title": "SRE — SLOs e Error Budget",
+      "uid": "solidarytech-sre-slo",
+      "tags": ["solidarytech", "sre", "slo"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-6h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "hide": 2,
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "refresh": 1,
+            "current": { "text": "Prometheus", "value": "prometheus" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Error Budget — janela de 30 dias",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false
+        },
+        {
+          "id": 1,
+          "type": "gauge",
+          "title": "Error Budget restante — Disponibilidade",
+          "description": "Fracao do orcamento de erro de 30 dias ainda disponivel. Em 0%, o SLO de 99,9% foi integralmente consumido e deploys de feature devem ser congelados.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 7, "w": 6, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:donation_availability:error_budget_remaining",
+              "legendFormat": "Disponibilidade"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "orange", "value": 0.25 },
+                  { "color": "green", "value": 0.5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "id": 2,
+          "type": "gauge",
+          "title": "Error Budget restante — Latencia",
+          "description": "Fracao do orcamento de latencia ainda disponivel. O SLO exige 99,9% das requisicoes em ate 500ms.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 7, "w": 6, "x": 6, "y": 1 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:donation_latency:error_budget_remaining",
+              "legendFormat": "Latencia"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "orange", "value": 0.25 },
+                  { "color": "green", "value": 0.5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "SLI Disponibilidade (30d)",
+          "description": "Fracao de requisicoes que nao retornaram 5xx nos ultimos 30 dias. SLO: 99,9%.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 7, "w": 6, "x": 12, "y": 1 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:donation_availability:ratio_rate30d",
+              "legendFormat": "Disponibilidade"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0.99,
+              "max": 1,
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 0.999 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "value_and_name",
+            "justifyMode": "center",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "SLI Latencia (30d)",
+          "description": "Fracao de requisicoes atendidas em ate 500ms nos ultimos 30 dias. SLO: 99,9%.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 7, "w": 6, "x": 18, "y": 1 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:donation_latency:ratio_rate30d",
+              "legendFormat": "Latencia"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0.99,
+              "max": 1,
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 0.999 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "value_and_name",
+            "justifyMode": "center",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Velocidade de consumo do orcamento",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+          "collapsed": false
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Burn Rate do Error Budget",
+          "description": "Quantas vezes mais rapido que o sustentavel o orcamento esta sendo consumido. 1x esgota o orcamento exatamente em 30 dias. Acima de 14,4x o on-call e paginado; acima de 6x abre-se ticket.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(1 - slo:donation_availability:ratio_rate1h) / 0.001",
+              "legendFormat": "Janela 1h"
+            },
+            {
+              "refId": "B",
+              "expr": "(1 - slo:donation_availability:ratio_rate6h) / 0.001",
+              "legendFormat": "Janela 6h"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "min": 0,
+              "decimals": 2,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "showPoints": "never",
+                "spanNulls": true,
+                "axisSoftMax": 20,
+                "thresholdsStyle": { "mode": "dashed" }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 6 },
+                  { "color": "red", "value": 14.4 }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Janela 6h" },
+                "properties": [
+                  { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 4] } }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Golden Metrics — donation-service",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+          "collapsed": false
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Latencia P99",
+          "description": "Percentil 99 do tempo de resposta. A linha tracejada marca o limite de 500ms definido no SLO.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 19 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:donation_latency_p99:seconds",
+              "legendFormat": "P99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "decimals": 3,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true,
+                "thresholdsStyle": { "mode": "dashed" }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 0.5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "single", "sort": "none" }
+          }
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Taxa de requisicoes por classe de status",
+          "description": "Requisicoes por segundo agrupadas por familia de status HTTP. As cores seguem a semantica de estado: verde para sucesso, ambar para erro do cliente, vermelho para erro do servidor.",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 19 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(http_requests_total{service=\"donation-service\", status=~\"2..\"}[5m]))",
+              "legendFormat": "2xx — sucesso"
+            },
+            {
+              "refId": "B",
+              "expr": "sum(rate(http_requests_total{service=\"donation-service\", status=~\"4..\"}[5m]))",
+              "legendFormat": "4xx — erro do cliente"
+            },
+            {
+              "refId": "C",
+              "expr": "sum(rate(http_requests_total{service=\"donation-service\", status=~\"5..\"}[5m]))",
+              "legendFormat": "5xx — erro do servidor"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "min": 0,
+              "decimals": 2,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "2xx — sucesso" },
+                "properties": [
+                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "4xx — erro do cliente" },
+                "properties": [
+                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "5xx — erro do servidor" },
+                "properties": [
+                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        }
+      ]
+    }

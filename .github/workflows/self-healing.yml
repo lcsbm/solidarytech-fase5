@@ -1,0 +1,84 @@
+name: Self-Healing — Rollout Restart
+
+# Disparado pelo self-healing-relay, que recebe o webhook do Grafana quando um
+# serviço fica sem réplicas disponíveis. É o mecanismo que sustenta o MTTR
+# declarado: detecção (1 min) -> disparo (segundos) -> restart (~90s).
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Deployment a reiniciar'
+        required: true
+        default: donation-service
+        type: choice
+        options: [donation-service, ngo-service, volunteer-service]
+      namespace:
+        description: 'Namespace Kubernetes'
+        required: true
+        default: solidarytech
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::603727984890:role/CICD-self-healing
+  EKS_CLUSTER: solidarytech-production
+
+permissions:
+  contents: read
+
+jobs:
+  rollout-restart:
+    name: Rollout Restart — ${{ inputs.service }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configura o kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$EKS_CLUSTER"
+
+      - name: Estado antes do restart
+        run: |
+          kubectl get pods -n "${{ inputs.namespace }}" \
+            -l app=${{ inputs.service }} -o wide
+
+      - name: Rollout restart
+        run: |
+          kubectl rollout restart deployment/${{ inputs.service }} \
+            -n "${{ inputs.namespace }}"
+
+      - name: Aguarda o rollout concluir
+        run: |
+          kubectl rollout status deployment/${{ inputs.service }} \
+            -n "${{ inputs.namespace }}" \
+            --timeout=120s
+
+      - name: Estado após o restart
+        run: |
+          kubectl get pods -n "${{ inputs.namespace }}" \
+            -l app=${{ inputs.service }} -o wide
+
+      # Evidência para o post-mortem: registra o que a automação fez e quando.
+      - name: Resumo da remediação
+        if: always()
+        run: |
+          {
+            echo "### Self-Healing — ${{ inputs.service }}"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Serviço | \`${{ inputs.service }}\` |"
+            echo "| Namespace | \`${{ inputs.namespace }}\` |"
+            echo "| Cluster | \`$EKS_CLUSTER\` |"
+            echo "| Resultado | ${{ job.status }} |"
+            echo "| Horário (UTC) | $(date -u '+%Y-%m-%d %H:%M:%S') |"
+          } >> "$GITHUB_STEP_SUMMARY"

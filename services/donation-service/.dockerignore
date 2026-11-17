@@ -1,0 +1,6 @@
+.env
+.env.*
+db/
+README.md
+Dockerfile
+.dockerignore

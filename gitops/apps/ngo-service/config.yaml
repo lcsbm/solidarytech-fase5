@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngo-service-config
+  namespace: solidarytech
+data:
+  PORT: "8081"
+  OTEL_SERVICE_NAME: ngo-service
+  OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector.monitoring.svc.cluster.local:4317
+---
+# A connection string vive no AWS Secrets Manager e e sincronizada pelo
+# External Secrets Operator — nunca versionada neste repositorio.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: ngo-service-secrets
+  namespace: solidarytech
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  target:
+    name: ngo-service-secrets
+    creationPolicy: Owner
+  data:
+    - secretKey: DATABASE_URL
+      remoteRef:
+        key: solidarytech/production/ngo-service/database-url
+        property: DATABASE_URL

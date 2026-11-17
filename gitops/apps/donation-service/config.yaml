@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: donation-service-config
+  namespace: solidarytech
+data:
+  PORT: "8082"
+  AWS_REGION: us-east-1
+  AWS_SQS_URL: https://sqs.us-east-1.amazonaws.com/603727984890/solidarytech-production-donations
+  OTEL_SERVICE_NAME: donation-service
+  OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector.monitoring.svc.cluster.local:4317
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: donation-service-secrets
+  namespace: solidarytech
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  target:
+    name: donation-service-secrets
+    creationPolicy: Owner
+  data:
+    - secretKey: DATABASE_URL
+      remoteRef:
+        key: solidarytech/production/donation-service/database-url
+        property: DATABASE_URL
