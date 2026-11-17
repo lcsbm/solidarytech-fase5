@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.17"
+    }
   }
 }
 
@@ -20,6 +24,20 @@ provider "aws" {
       Environment = "Production"
       CostCenter  = "NGO-Core"
       ManagedBy   = "Terraform"
+    }
+  }
+}
+
+# Autentica no cluster recém-criado via token STS — sem kubeconfig versionado.
+provider "helm" {
+  kubernetes {
+    host                   = module.platform.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.platform.cluster_certificate_authority_data)
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.platform.cluster_name, "--region", var.aws_region]
     }
   }
 }

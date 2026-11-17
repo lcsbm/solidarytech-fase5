@@ -1,0 +1,160 @@
+name: Terraform — Destroy
+
+# Derruba um ambiente inteiro. Existe por razão de FinOps: manter EKS e RDS
+# ligados fora das janelas de demonstração custa ~US$ 250/mês por ambiente.
+#
+# A confirmação exige digitar `destroy-<ambiente>` — e não um "DESTROY" genérico —
+# para que não seja possível destruir produção tendo escolhido DR no menu.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente a destruir'
+        required: true
+        type: choice
+        options: [prod, dr]
+      confirm:
+        description: 'Digite destroy-prod ou destroy-dr, conforme o ambiente escolhido'
+        required: true
+        type: string
+
+env:
+  TF_VERSION: '1.13.3'
+  AWS_ROLE_ARN: arn:aws:iam::603727984890:role/SolidaryTech-CICD-terraform
+
+permissions:
+  contents: read
+
+jobs:
+  destroy:
+    name: Destroy — ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    # Barreira 1: a confirmação precisa casar com o ambiente escolhido.
+    if: inputs.confirm == format('destroy-{0}', inputs.environment)
+    # Barreira 2: aprovação manual no environment protegido do GitHub.
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      AWS_REGION: ${{ inputs.environment == 'prod' && 'us-east-1' || 'us-east-2' }}
+      CLUSTER: ${{ inputs.environment == 'prod' && 'solidarytech-production' || 'solidarytech-dr' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Init
+        working-directory: terraform/envs/${{ inputs.environment }}
+        run: terraform init -input=false
+
+      - name: Configura o kubectl
+        run: aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
+        continue-on-error: true
+
+      # O ArgoCD recria o que for deletado enquanto estiver sincronizando.
+      # Remover as Applications primeiro evita essa corrida durante o destroy.
+      - name: Remove as Applications do ArgoCD
+        continue-on-error: true
+        run: |
+          for app in solidarytech-apps solidarytech-monitoring; do
+            kubectl patch application "$app" -n argocd \
+              -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
+            kubectl delete application "$app" -n argocd --wait=false 2>/dev/null || true
+          done
+          sleep 5
+
+      # Finalizers de CRDs deixam namespaces presos em Terminating indefinidamente,
+      # e o Terraform trava esperando o EKS liberar os recursos de rede.
+      - name: Remove finalizers presos
+        continue-on-error: true
+        run: |
+          for api in applications.argoproj.io \
+                     externalsecrets.external-secrets.io \
+                     clustersecretstores.external-secrets.io; do
+            kubectl get "$api" -A -o name 2>/dev/null | while read -r res; do
+              kubectl patch "$res" -p '{"metadata":{"finalizers":null}}' \
+                --type=merge 2>/dev/null || true
+            done
+          done
+
+          kubectl delete all --all -n solidarytech --force --grace-period=0 2>/dev/null || true
+
+      # Load balancers criados pelo ingress-nginx não pertencem ao state do
+      # Terraform. Se sobrarem, a VPC não é deletada e o destroy falha no fim.
+      - name: Remove os Services do tipo LoadBalancer
+        continue-on-error: true
+        run: |
+          kubectl get svc -A \
+            -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' \
+            2>/dev/null | while read -r ns name; do
+              [ -n "$name" ] && kubectl delete svc "$name" -n "$ns" --wait=false 2>/dev/null || true
+            done
+          sleep 30
+
+      - name: Desinstala os Helm releases
+        continue-on-error: true
+        run: |
+          for release in argocd ingress-nginx external-secrets metrics-server; do
+            ns="$release"
+            [ "$release" = "metrics-server" ] && ns=kube-system
+            helm uninstall "$release" -n "$ns" --wait=false 2>/dev/null || true
+          done
+
+      - name: Força a finalização dos namespaces
+        continue-on-error: true
+        run: |
+          for ns in solidarytech monitoring argocd external-secrets ingress-nginx; do
+            kubectl patch namespace "$ns" -p '{"metadata":{"finalizers":null}}' \
+              --type=merge 2>/dev/null || true
+            kubectl delete namespace "$ns" --wait=false 2>/dev/null || true
+            sleep 2
+            # spec.finalizers=["kubernetes"] só sai pela subresource /finalize
+            kubectl get namespace "$ns" -o json 2>/dev/null \
+              | jq '.spec.finalizers = []' \
+              | kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null || true
+          done
+
+      # A AWS remove security groups e ENIs junto com o EKS, então a primeira
+      # passada frequentemente falha ao tentar deletar o que já não existe.
+      - name: Destroy — primeira passada
+        working-directory: terraform/envs/${{ inputs.environment }}
+        timeout-minutes: 90
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var="eks_admin_iam_arn=${{ secrets.EKS_ADMIN_IAM_ARN }}" || true
+
+      - name: Destroy — segunda passada
+        working-directory: terraform/envs/${{ inputs.environment }}
+        timeout-minutes: 60
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var="eks_admin_iam_arn=${{ secrets.EKS_ADMIN_IAM_ARN }}"
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Destroy — ${{ inputs.environment }}"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Ambiente | \`${{ inputs.environment }}\` |"
+            echo "| Região | \`$AWS_REGION\` |"
+            echo "| Cluster | \`$CLUSTER\` |"
+            echo "| Resultado | ${{ job.status }} |"
+            echo "| Horário (UTC) | $(date -u '+%Y-%m-%d %H:%M:%S') |"
+            echo ""
+            echo "O bucket de state e as roles de CI/CD **não** são removidos:"
+            echo "pertencem ao \`terraform/bootstrap\`, destruído à parte."
+          } >> "$GITHUB_STEP_SUMMARY"
