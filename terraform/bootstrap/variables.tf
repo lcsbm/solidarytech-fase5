@@ -35,7 +35,12 @@ variable "create_state_bucket" {
 }
 
 variable "create_oidc_provider" {
-  description = "false se o provider OIDC do GitHub já existe na conta (criado na Fase 4)"
+  description = <<-EOT
+    Cria o provider OIDC do GitHub. Ele é único por conta e já existe nesta
+    (criado na Fase 4), por isso o default é false. Mantê-lo não deixa acesso
+    residual: o provider só federa identidades — quem concede acesso é a trust
+    policy de cada role. Mude para true apenas em uma conta onde ele não exista.
+  EOT
   type        = bool
   default     = false
 }
