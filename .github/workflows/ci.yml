@@ -81,9 +81,14 @@ jobs:
         working-directory: services/donation-service
         run: |
           go mod tidy
+          if ! git diff --quiet -- go.mod go.sum; then
+            echo "::error::go.mod/go.sum desatualizados. Rode 'go mod tidy' e versione o resultado."
+            git diff -- go.mod go.sum
+            exit 1
+          fi
           go vet ./...
           go build ./...
-          go test ./... || echo "Nenhum teste definido ainda"
+          go test -v -race ./...
 
       - name: Setup Python
         if: matrix.service != 'donation-service'

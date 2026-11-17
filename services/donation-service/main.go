@@ -109,10 +109,10 @@ func hostFromDSN(dsn string) string {
 // O New Relic usa messaging.destination.name (nome, não URL) para sintetizar a entidade.
 func queueNameFromURL(queueURL string) string {
 	parts := strings.Split(strings.TrimSuffix(queueURL, "/"), "/")
-	if len(parts) == 0 {
-		return "unknown"
+	if name := parts[len(parts)-1]; name != "" {
+		return name
 	}
-	return parts[len(parts)-1]
+	return "unknown"
 }
 
 func (a *App) HealthHandler(w http.ResponseWriter, r *http.Request) {
