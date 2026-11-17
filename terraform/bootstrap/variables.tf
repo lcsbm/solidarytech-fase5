@@ -1,0 +1,41 @@
+variable "project" {
+  description = "Nome do projeto — prefixo dos repositórios ECR e clusters"
+  type        = string
+  default     = "solidarytech"
+}
+
+variable "aws_region" {
+  description = "Região onde o bucket de state é criado"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "github_repo" {
+  description = "Repositório autorizado a assumir as roles, no formato owner/repo"
+  type        = string
+  default     = "lcsbm/solidarytech-fase5"
+}
+
+variable "role_prefix" {
+  description = "Prefixo das roles de CI/CD. Distinto do usado na Fase 4 para não colidir"
+  type        = string
+  default     = "SolidaryTech-CICD"
+}
+
+variable "state_bucket_name" {
+  description = "Bucket S3 do state remoto — deve bater com o backend.tf dos ambientes"
+  type        = string
+  default     = "solidarytech-tfstate"
+}
+
+variable "create_state_bucket" {
+  description = "false se o bucket já foi criado manualmente no console"
+  type        = bool
+  default     = true
+}
+
+variable "create_oidc_provider" {
+  description = "false se o provider OIDC do GitHub já existe na conta (criado na Fase 4)"
+  type        = bool
+  default     = false
+}

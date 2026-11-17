@@ -162,7 +162,7 @@ jobs:
       - name: Autentica na AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::603727984890:role/CICD-ecr-push
+          role-to-assume: arn:aws:iam::603727984890:role/SolidaryTech-CICD-ecr-push
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login no ECR

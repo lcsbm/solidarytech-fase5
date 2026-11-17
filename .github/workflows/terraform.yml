@@ -121,7 +121,7 @@ jobs:
       - name: Autentica na AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::603727984890:role/CICD-terraform
+          role-to-assume: arn:aws:iam::603727984890:role/SolidaryTech-CICD-terraform
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Init
@@ -182,7 +182,7 @@ jobs:
       - name: Autentica na AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::603727984890:role/CICD-terraform
+          role-to-assume: arn:aws:iam::603727984890:role/SolidaryTech-CICD-terraform
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Init

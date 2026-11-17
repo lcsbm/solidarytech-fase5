@@ -90,27 +90,42 @@ mantém o cluster de DR com **1 nó ligado** (custo de ~US$ 35/mês) e escala so
 Pré-requisito: a decisão de acionar o DR cabe ao responsável técnico de plantão, após
 confirmar que a indisponibilidade do primário excede 1 hora sem previsão de retorno.
 
-```bash
-# 1. Escalar o cluster de DR para capacidade de produção
-cd terraform/envs/dr
-terraform init
-terraform apply -var="warm_standby_nodes=2"
+**Passo 1 — Escalar o cluster de DR.** Pela esteira, para que a ação fique registrada
+no histórico do GitHub Actions e auditável no post-mortem:
 
-# 2. Restaurar os bancos a partir do snapshot mais recente
+> *Actions > "Terraform — Plan e Apply" > Run workflow* → `environment: dr`,
+> `action: apply`
+
+**Passo 2 — Restaurar os bancos** a partir do snapshot mais recente:
+
+```bash
 aws rds restore-db-instance-from-db-snapshot \
   --region us-east-2 \
   --db-instance-identifier solidarytech-dr-donation \
   --db-snapshot-identifier <snapshot-mais-recente>
+```
 
-# 3. Apontar o ArgoCD do DR para o repositório (sincroniza as 3 aplicações)
+**Passo 3 — Sincronizar as aplicações** no cluster de DR:
+
+```bash
+aws eks update-kubeconfig --region us-east-2 --name solidarytech-dr
 kubectl apply -f gitops/bootstrap/app-of-apps.yaml
+```
 
-# 4. Validar
+**Passo 4 — Validar:**
+
+```bash
 kubectl get pods -n solidarytech
 curl https://<endpoint-dr>/health
-
-# 5. Atualizar o DNS no Route53 para o load balancer da região de DR
 ```
+
+**Passo 5 — Redirecionar o DNS** no Route53 para o load balancer da região de DR.
+
+> **Break-glass:** se o próprio GitHub Actions estiver indisponível durante o
+> desastre, o passo 1 pode ser executado localmente com
+> `terraform -chdir=terraform/envs/dr apply -var="warm_standby_nodes=2"`.
+> O uso dessa exceção precisa constar do post-mortem — ela contorna a trilha de
+> auditoria que a esteira fornece.
 
 ### Retorno ao primário (failback)
 

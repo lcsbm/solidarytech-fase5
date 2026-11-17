@@ -116,18 +116,50 @@ terraform init && terraform apply
 
 ## Como subir o ambiente
 
+A infraestrutura é provisionada **pela esteira**, não por `terraform apply` local.
+O único passo manual é o bootstrap, e ele existe por uma razão específica: a esteira
+se autentica na AWS assumindo uma role OIDC, e essa role não pode ser criada pela
+própria esteira que depende dela.
+
+### Passo 0 — Bootstrap (uma única vez, local)
+
+Cria o bucket de state e as três roles de CI/CD. É o único `terraform apply` que
+roda fora da esteira, e o único state que fica local.
+
 ```bash
-# 1. Infraestrutura
-cd terraform/envs/prod
+cd terraform/bootstrap
 terraform init
-terraform apply -var="eks_admin_iam_arn=arn:aws:iam::<conta>:user/<usuario>"
+terraform apply
+```
 
-# 2. Acesso ao cluster
+Depois, cadastre o secret `EKS_ADMIN_IAM_ARN` em
+*Settings > Secrets and variables > Actions*.
+
+### Passo 1 — Infraestrutura, pela esteira
+
+*Actions > "Terraform — Plan e Apply" > Run workflow* → `environment: prod`,
+`action: apply`.
+
+O `apply` nunca dispara sozinho: exige acionamento manual e passa pelo
+*environment* protegido do GitHub. Em pull request, o workflow só roda `plan` e
+publica o resultado como comentário.
+
+### Passo 2 — GitOps
+
+```bash
 aws eks update-kubeconfig --region us-east-1 --name solidarytech-production
-
-# 3. GitOps — único apply manual; o ArgoCD assume o resto
 kubectl apply -f gitops/bootstrap/app-of-apps.yaml
 ```
+
+Este é o único `kubectl apply` do projeto. A partir dele o ArgoCD assume a entrega
+dos três serviços e de toda a stack de observabilidade — deploys passam a acontecer
+por commit no repositório, nunca por comando manual.
+
+### Passo 3 — Aplicações
+
+Um push em `services/**` dispara o `ci.yml`, que testa, escaneia com Trivy, publica
+a imagem no ECR e atualiza a tag no manifesto GitOps. O ArgoCD detecta o commit e
+sincroniza.
 
 ---
 

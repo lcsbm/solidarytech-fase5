@@ -19,7 +19,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  AWS_ROLE_ARN: arn:aws:iam::603727984890:role/CICD-self-healing
+  AWS_ROLE_ARN: arn:aws:iam::603727984890:role/SolidaryTech-CICD-self-healing
   EKS_CLUSTER: solidarytech-production
 
 permissions:
