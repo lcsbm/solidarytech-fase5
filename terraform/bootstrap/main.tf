@@ -7,20 +7,6 @@ terraform {
       version = "~> 5.0"
     }
   }
-
-  # Sem backend remoto: este é o único state que fica local, porque é este
-  # código que cria o bucket onde todos os outros states vivem.
-  #
-  # Depois do primeiro apply o bucket já existe, e vale migrar este state para
-  # ele — basta descomentar o bloco abaixo e rodar `terraform init -migrate-state`.
-  # Sem isso, perder a máquina significa perder o rastreamento destes recursos.
-  #
-  # backend "s3" {
-  #   bucket  = "solidarytech-tfstate"
-  #   key     = "bootstrap/terraform.tfstate"
-  #   region  = "us-east-1"
-  #   encrypt = true
-  # }
 }
 
 provider "aws" {
@@ -55,6 +41,8 @@ locals {
 }
 
 # ── State remoto ──
+# Criado por este mesmo Terraform, que na primeira execução roda com state
+# local e migra para cá em seguida — ver .github/workflows/bootstrap.yml.
 resource "aws_s3_bucket" "tfstate" {
   count = var.create_state_bucket ? 1 : 0
 
@@ -136,25 +124,9 @@ data "aws_iam_policy_document" "github_assume_role" {
   }
 }
 
-# ── Role do Terraform ──
-resource "aws_iam_role" "terraform" {
-  name               = "${var.role_prefix}-terraform"
-  description        = "Role assumida pelo workflow terraform.yml para provisionar a plataforma"
-  assume_role_policy = data.aws_iam_policy_document.github_assume_role.json
-
-  # 2h: o destroy — duas passadas mais a limpeza de finalizers — pode passar
-  # de 1h, e o token do OIDC expiraria no meio. O apply do EKS cabe em 1h,
-  # mas usa o mesmo teto por simplicidade.
-  max_session_duration = 7200
-}
-
-# Trade-off assumido: provisionar EKS, VPC, RDS e IAM exige permissão ampla.
-# Em um ambiente corporativo esta política seria recortada por serviço; aqui a
-# proteção efetiva é a condição de trust acima, que limita quem assume a role.
-resource "aws_iam_role_policy_attachment" "terraform_admin" {
-  role       = aws_iam_role.terraform.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
-}
+# A role de Terraform (SolidaryTech-CICD-terraform) NÃO é criada aqui: é a
+# semente que este próprio workflow assume para rodar, criada à mão com os
+# inputs versionados em seed/. Tudo o que ela cria a partir daí é Terraform.
 
 # ── Role de push no ECR ──
 resource "aws_iam_role" "ecr_push" {
