@@ -190,26 +190,3 @@ resource "aws_iam_role_policy" "ecr_push" {
   role   = aws_iam_role.ecr_push.id
   policy = data.aws_iam_policy_document.ecr_push.json
 }
-
-# ── Role do self-healing ──
-resource "aws_iam_role" "self_healing" {
-  name               = "${var.role_prefix}-self-healing"
-  description        = "Role assumida pelo workflow self-healing.yml para reiniciar deployments"
-  assume_role_policy = data.aws_iam_policy_document.github_assume_role.json
-}
-
-# Apenas descrever o cluster: a autorização dentro do Kubernetes vem do
-# access entry do EKS, concedido pelo módulo platform.
-data "aws_iam_policy_document" "self_healing" {
-  statement {
-    effect    = "Allow"
-    actions   = ["eks:DescribeCluster"]
-    resources = ["arn:aws:eks:*:${data.aws_caller_identity.current.account_id}:cluster/${var.project}-*"]
-  }
-}
-
-resource "aws_iam_role_policy" "self_healing" {
-  name   = "eks-describe"
-  role   = aws_iam_role.self_healing.id
-  policy = data.aws_iam_policy_document.self_healing.json
-}

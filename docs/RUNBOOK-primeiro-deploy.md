@@ -99,10 +99,10 @@ formato real.
 
 ---
 
-## 4. Secrets Manager — os cinco que o Terraform não cria
+## 4. Secrets Manager — os quatro que o Terraform não cria
 
 Os dois `database-url` já existem, criados no passo 3 com senha gerada pelo
-Terraform. Estes cinco guardam credenciais de terceiros: criados à mão, nunca
+Terraform. Estes quatro guardam credenciais de terceiros: criados à mão, nunca
 versionados.
 
 | Nome | JSON | Onde obter |
@@ -111,23 +111,18 @@ versionados.
 | `solidarytech/pagerduty` | `{"integration_key": "<key>"}` | PagerDuty → Service → Integrations → Events API v2 |
 | `solidarytech/discord` | `{"webhook_url": "<url>"}` | Discord → canal → Integrações → Webhooks |
 | `solidarytech/new-relic` | `{"license_key": "<key>"}` | New Relic → API keys → tipo *License* (INGEST) |
-| `solidarytech/github-pat` | `{"token": "<pat>"}` | GitHub → Fine-grained PAT → repo `solidarytech-fase5` → *Actions: Read and write* |
 
 ```bash
 aws secretsmanager create-secret --region us-east-1 --name solidarytech/grafana    --secret-string '{"admin":"<senha>"}'
 aws secretsmanager create-secret --region us-east-1 --name solidarytech/pagerduty  --secret-string '{"integration_key":"<key>"}'
 aws secretsmanager create-secret --region us-east-1 --name solidarytech/discord    --secret-string '{"webhook_url":"<url>"}'
 aws secretsmanager create-secret --region us-east-1 --name solidarytech/new-relic  --secret-string '{"license_key":"<key>"}'
-aws secretsmanager create-secret --region us-east-1 --name solidarytech/github-pat --secret-string '{"token":"<pat>"}'
 ```
-
-O `github-pat` é do **relay de self-healing**, que dispara o workflow de dentro do
-cluster. O CI não usa PAT — usa o `GITHUB_TOKEN` do próprio job.
 
 **Verificação**
 
 ```bash
-aws secretsmanager list-secrets --query "SecretList[?starts_with(Name,'solidarytech/')].Name" --output table   # 7 ao todo
+aws secretsmanager list-secrets --query "SecretList[?starts_with(Name,'solidarytech/')].Name" --output table   # 6 ao todo
 ```
 
 ---

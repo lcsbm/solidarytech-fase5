@@ -8,11 +8,6 @@ output "ecr_push_role_arn" {
   value       = aws_iam_role.ecr_push.arn
 }
 
-output "self_healing_role_arn" {
-  description = "Usar em .github/workflows/self-healing.yml"
-  value       = aws_iam_role.self_healing.arn
-}
-
 output "state_bucket" {
   description = "Bucket do state remoto — deve bater com o backend.tf dos ambientes"
   value       = var.state_bucket_name

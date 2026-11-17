@@ -1,4 +1,10 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: self-healing-relay
+  namespace: monitoring
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: self-healing-relay
@@ -6,61 +12,88 @@ metadata:
 data:
   relay.py: |
     """
-    Self-Healing Relay — recebe o webhook do Grafana e dispara o workflow de
-    remediacao no GitHub Actions.
+    Self-Healing Relay — recebe o webhook do Grafana e substitui os pods que
+    nao estao Ready no servico alertado, direto pela API do Kubernetes.
 
-    Diferente de um disparo fixo, o servico a reiniciar vem do label `service` do
-    alerta, validado contra uma allowlist: um webhook arbitrario nao consegue
-    reiniciar um deployment qualquer do cluster.
+    Sem credencial externa: usa o token do ServiceAccount projetado no pod
+    (rotacionado pelo kubelet) com RBAC restrito a listar e remover pods no
+    namespace da aplicacao. Pods saudaveis nao sao tocados; o Deployment
+    recria os removidos. O servico vem do label `service` do alerta, validado
+    contra uma allowlist.
     """
     import json
     import os
+    import ssl
     import urllib.request
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
-    GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-    GITHUB_REPO = os.environ.get("GITHUB_REPO", "lcsbm/solidarytech-fase5")
     NAMESPACE = os.environ.get("TARGET_NAMESPACE", "solidarytech")
 
-    GITHUB_URL = (
-        f"https://api.github.com/repos/{GITHUB_REPO}"
-        "/actions/workflows/self-healing.yml/dispatches"
-    )
-
-    # Apenas estes deployments podem ser reiniciados pela automacao.
     ALLOWED_SERVICES = {"ngo-service", "donation-service", "volunteer-service"}
-
     DEFAULT_SERVICE = "donation-service"
 
+    SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
+    API = "https://%s:%s" % (os.environ["KUBERNETES_SERVICE_HOST"], os.environ["KUBERNETES_SERVICE_PORT"])
 
-    def extract_service(alert: dict) -> str | None:
-        """Le o label `service` do payload do Grafana e valida contra a allowlist."""
+    _ssl = ssl.create_default_context(cafile=f"{SA_DIR}/ca.crt")
+
+
+    def _token():
+        # Lido a cada chamada: o kubelet rotaciona o token projetado.
+        with open(f"{SA_DIR}/token") as f:
+            return f.read().strip()
+
+
+    def _k8s(method, path):
+        req = urllib.request.Request(API + path, method=method, headers={
+            "Authorization": f"Bearer {_token()}",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, context=_ssl, timeout=10) as resp:
+            return json.load(resp)
+
+
+    def extract_service(alert):
         labels = alert.get("commonLabels") or {}
         service = labels.get("service")
-
         if not service:
             for item in alert.get("alerts") or []:
                 service = (item.get("labels") or {}).get("service")
                 if service:
                     break
-
-        if not service:
-            service = DEFAULT_SERVICE
-
+        service = service or DEFAULT_SERVICE
         if service not in ALLOWED_SERVICES:
-            print(f"Servico '{service}' fora da allowlist — disparo recusado.")
+            print(f"Servico '{service}' fora da allowlist — recusado.")
             return None
-
         return service
+
+
+    def is_ready(pod):
+        if pod["metadata"].get("deletionTimestamp"):
+            return True  # ja esta saindo; nao mexer
+        for cond in pod.get("status", {}).get("conditions") or []:
+            if cond.get("type") == "Ready":
+                return cond.get("status") == "True"
+        return False
+
+
+    def heal(service):
+        pods = _k8s("GET", f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{service}")["items"]
+        broken = [p["metadata"]["name"] for p in pods if not is_ready(p)]
+        if not broken:
+            print(f"{service}: {len(pods)} pod(s), todos Ready — nada a fazer.")
+            return 0
+        for name in broken:
+            _k8s("DELETE", f"/api/v1/namespaces/{NAMESPACE}/pods/{name}")
+            print(f"{service}: pod {name} removido — o Deployment o recria.")
+        return len(broken)
 
 
     class RelayHandler(BaseHTTPRequestHandler):
         def do_POST(self):
             length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
-
             try:
-                alert = json.loads(body)
+                alert = json.loads(self.rfile.read(length))
             except json.JSONDecodeError as e:
                 print(f"Payload invalido: {e}")
                 self._respond(400)
@@ -68,10 +101,8 @@ data:
 
             status = alert.get("status", "unknown")
             print(f"Alerta recebido — status: {status}")
-
             # Sem este filtro, o alerta dispararia de novo ao ser resolvido.
             if status != "firing":
-                print("Status diferente de 'firing' — ignorado.")
                 self._respond(200)
                 return
 
@@ -80,34 +111,15 @@ data:
                 self._respond(403)
                 return
 
-            payload = json.dumps({
-                "ref": "main",
-                "inputs": {"service": service, "namespace": NAMESPACE},
-            }).encode()
-
-            req = urllib.request.Request(
-                GITHUB_URL,
-                data=payload,
-                headers={
-                    "Authorization": f"Bearer {GITHUB_TOKEN}",
-                    "Accept": "application/vnd.github+json",
-                    "Content-Type": "application/json",
-                },
-            )
-
             try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    print(f"Workflow disparado para '{service}' — HTTP {resp.status}")
+                heal(service)
                 self._respond(204)
             except Exception as e:
-                print(f"Falha ao disparar o workflow: {e}")
+                print(f"Falha ao sanear {service}: {e}")
                 self._respond(502)
 
         def do_GET(self):
-            if self.path == "/health":
-                self._respond(200)
-            else:
-                self._respond(404)
+            self._respond(200 if self.path == "/health" else 404)
 
         def _respond(self, code):
             self.send_response(code)
@@ -140,11 +152,14 @@ spec:
         app: self-healing-relay
       annotations:
         # Forca o rollout quando o script muda — sem isso o pod segue com a versao antiga.
-        checksum/relay: "4dc7240408f9d86a"
+        checksum/relay: "d844844f6d7004f4"
     spec:
+      serviceAccountName: self-healing-relay
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
+        # fsGroup garante leitura do token projetado do ServiceAccount.
+        fsGroup: 65534
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -155,15 +170,8 @@ spec:
             - name: http
               containerPort: 8080
           env:
-            - name: GITHUB_REPO
-              value: lcsbm/solidarytech-fase5
             - name: TARGET_NAMESPACE
               value: solidarytech
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-github-pat
-                  key: GITHUB_PAT
           volumeMounts:
             - name: script
               mountPath: /app
