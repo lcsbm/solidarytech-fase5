@@ -1,0 +1,76 @@
+# Aplica o schema no RDS como hook do ArgoCD, depois de cada sync bem-sucedido.
+# Idempotente (IF NOT EXISTS / ON CONFLICT): rodar de novo e seguro, e cada
+# deploy reafirma o schema. Limite conhecido: CREATE TABLE IF NOT EXISTS nao
+# altera tabelas existentes — mudar colunas exigiria uma ferramenta de migracao.
+#
+# Fonte: services/ngo-service/db/init.sql — manter os dois identicos.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngo-service-schema
+  namespace: solidarytech
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS ngos (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(150) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        cause VARCHAR(100) NOT NULL, -- Ex: Proteção Animal, Educação, Fome
+        city VARCHAR(100) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    INSERT INTO ngos (name, email, cause, city) VALUES
+    ('Anjos de Patas', 'contato@anjosdepatas.org', 'Proteção Animal', 'Osasco'),
+    ('Educa Mais', 'info@educamais.org', 'Educação', 'São Paulo')
+    ON CONFLICT (email) DO NOTHING;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ngo-service-schema
+  namespace: solidarytech
+  annotations:
+    # PostSync: roda depois que os pods estao Ready — e a ExternalSecret ja
+    # virou Secret. BeforeHookCreation limpa um hook anterior que tenha falhado.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: psql
+          image: postgres:15-alpine
+          command: ["psql", "$(DATABASE_URL)", "-v", "ON_ERROR_STOP=1", "-f", "/sql/init.sql"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ngo-service-secrets
+                  key: DATABASE_URL
+          volumeMounts:
+            - name: schema
+              mountPath: /sql
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: schema
+          configMap:
+            name: ngo-service-schema
