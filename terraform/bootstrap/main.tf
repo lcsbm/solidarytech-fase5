@@ -7,20 +7,6 @@ terraform {
       version = "~> 5.0"
     }
   }
-
-  # Sem backend remoto: este é o único state que fica local, porque é este
-  # código que cria o bucket onde todos os outros states vivem.
-  #
-  # Depois do primeiro apply o bucket já existe, e vale migrar este state para
-  # ele — basta descomentar o bloco abaixo e rodar `terraform init -migrate-state`.
-  # Sem isso, perder a máquina significa perder o rastreamento destes recursos.
-  #
-  # backend "s3" {
-  #   bucket  = "solidarytech-tfstate"
-  #   key     = "bootstrap/terraform.tfstate"
-  #   region  = "us-east-1"
-  #   encrypt = true
-  # }
 }
 
 provider "aws" {
@@ -39,10 +25,24 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  repo_subject = "repo:${var.github_repo}:*"
+  github_owner = split("/", var.github_repo)[0]
+  github_repo  = split("/", var.github_repo)[1]
+
+  # Dois formatos porque o GitHub pode emitir o sub com ou sem os IDs numéricos
+  # de owner e repositório — as roles da Fase 4 nesta conta usam a forma com IDs
+  # e funcionaram. Ambos fixam exatamente este repositório; o com IDs ainda
+  # resiste à recriação do repo sob o mesmo nome por outra conta.
+  # Após o primeiro deploy, o evento AssumeRoleWithWebIdentity no CloudTrail
+  # mostra qual dos dois casou: remova o outro.
+  repo_subjects = [
+    "repo:${var.github_repo}:*",
+    "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repo_id}:*",
+  ]
 }
 
 # ── State remoto ──
+# Criado por este mesmo Terraform, que na primeira execução roda com state
+# local e migra para cá em seguida — ver .github/workflows/bootstrap.yml.
 resource "aws_s3_bucket" "tfstate" {
   count = var.create_state_bucket ? 1 : 0
 
@@ -119,25 +119,14 @@ data "aws_iam_policy_document" "github_assume_role" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [local.repo_subject]
+      values   = local.repo_subjects
     }
   }
 }
 
-# ── Role do Terraform ──
-resource "aws_iam_role" "terraform" {
-  name               = "${var.role_prefix}-terraform"
-  description        = "Role assumida pelo workflow terraform.yml para provisionar a plataforma"
-  assume_role_policy = data.aws_iam_policy_document.github_assume_role.json
-}
-
-# Trade-off assumido: provisionar EKS, VPC, RDS e IAM exige permissão ampla.
-# Em um ambiente corporativo esta política seria recortada por serviço; aqui a
-# proteção efetiva é a condição de trust acima, que limita quem assume a role.
-resource "aws_iam_role_policy_attachment" "terraform_admin" {
-  role       = aws_iam_role.terraform.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
-}
+# A role de Terraform (SolidaryTech-CICD-terraform) NÃO é criada aqui: é a
+# semente que este próprio workflow assume para rodar, criada à mão com os
+# inputs versionados em seed/. Tudo o que ela cria a partir daí é Terraform.
 
 # ── Role de push no ECR ──
 resource "aws_iam_role" "ecr_push" {
@@ -172,27 +161,4 @@ resource "aws_iam_role_policy" "ecr_push" {
   name   = "ecr-push"
   role   = aws_iam_role.ecr_push.id
   policy = data.aws_iam_policy_document.ecr_push.json
-}
-
-# ── Role do self-healing ──
-resource "aws_iam_role" "self_healing" {
-  name               = "${var.role_prefix}-self-healing"
-  description        = "Role assumida pelo workflow self-healing.yml para reiniciar deployments"
-  assume_role_policy = data.aws_iam_policy_document.github_assume_role.json
-}
-
-# Apenas descrever o cluster: a autorização dentro do Kubernetes vem do
-# access entry do EKS, concedido pelo módulo platform.
-data "aws_iam_policy_document" "self_healing" {
-  statement {
-    effect    = "Allow"
-    actions   = ["eks:DescribeCluster"]
-    resources = ["arn:aws:eks:*:${data.aws_caller_identity.current.account_id}:cluster/${var.project}-*"]
-  }
-}
-
-resource "aws_iam_role_policy" "self_healing" {
-  name   = "eks-describe"
-  role   = aws_iam_role.self_healing.id
-  policy = data.aws_iam_policy_document.self_healing.json
 }

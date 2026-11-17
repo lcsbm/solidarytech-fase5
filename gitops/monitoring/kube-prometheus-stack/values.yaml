@@ -42,12 +42,10 @@ grafana:
     existingSecret: grafana-admin-secret
     userKey: admin-user
     passwordKey: admin-password
-  # Injeta credenciais de alerting e self-healing como env vars no container Grafana
+  # Injeta credenciais de alerting como env vars no container Grafana
   extraEnvFrom:
     - secretRef:
         name: grafana-alerting-secrets
-    - secretRef:
-        name: grafana-github-pat
   extraSecretMounts:
     - name: grafana-contactpoints
       secretName: grafana-contactpoints
@@ -114,8 +112,8 @@ grafana:
           interval: 1m
           rules:
             # Hot Path da plataforma: sem réplicas, nenhuma doação é processada.
-            # Dispara o contact point Self-Healing, que reinicia o deployment via
-            # GitHub Actions — é o mecanismo que sustenta o MTTR declarado.
+            # Dispara o contact point Self-Healing, que substitui os pods quebrados
+            # pela API do Kubernetes — é o mecanismo que sustenta o MTTR declarado.
             - uid: donation-service-down
               title: "donation-service sem réplicas disponíveis"
               condition: threshold

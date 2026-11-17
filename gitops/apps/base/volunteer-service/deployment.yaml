@@ -54,7 +54,7 @@ spec:
                     values: ["burstable"]
       containers:
         - name: volunteer-service
-          image: 603727984890.dkr.ecr.us-east-1.amazonaws.com/solidarytech/volunteer-service:latest
+          image: solidarytech/volunteer-service:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

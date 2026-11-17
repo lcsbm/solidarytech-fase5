@@ -1,0 +1,100 @@
+# DR (us-east-2). Mesma base da producao; muda apenas o que e regional:
+# o ECR de onde puxar, a fila, a tabela, as roles IRSA e as secrets do RDS.
+# Tudo abaixo espelha os nomes que terraform/envs/dr produz.
+#
+# As tags de imagem sao as mesmas de producao — o CI grava nos dois overlays.
+# O DR sempre carrega a versao que esta em producao.
+#
+# Pre-requisito fora deste overlay: as 4 secrets manuais (grafana, pagerduty,
+# discord, new-relic) replicadas para us-east-2 — ver docs/PCN.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: solidarytech/ngo-service
+    newName: 603727984890.dkr.ecr.us-east-2.amazonaws.com/solidarytech/ngo-service
+    newTag: latest
+  - name: solidarytech/donation-service
+    newName: 603727984890.dkr.ecr.us-east-2.amazonaws.com/solidarytech/donation-service
+    newTag: latest
+  - name: solidarytech/volunteer-service
+    newName: 603727984890.dkr.ecr.us-east-2.amazonaws.com/solidarytech/volunteer-service
+    newTag: latest
+
+patches:
+  - patch: |-
+      apiVersion: external-secrets.io/v1
+      kind: ClusterSecretStore
+      metadata:
+        name: aws-secrets-manager
+      spec:
+        provider:
+          aws:
+            region: us-east-2
+
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: donation-service-config
+        namespace: solidarytech
+      data:
+        AWS_REGION: us-east-2
+        AWS_SQS_URL: https://sqs.us-east-2.amazonaws.com/603727984890/solidarytech-dr-donations
+
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: volunteer-service-config
+        namespace: solidarytech
+      data:
+        AWS_REGION: us-east-2
+        AWS_DYNAMODB_TABLE: SolidaryTechVolunteers-dr
+
+  - patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: donation-service
+        namespace: solidarytech
+        annotations:
+          eks.amazonaws.com/role-arn: arn:aws:iam::603727984890:role/solidarytech-dr-donation-service
+
+  - patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: volunteer-service
+        namespace: solidarytech
+        annotations:
+          eks.amazonaws.com/role-arn: arn:aws:iam::603727984890:role/solidarytech-dr-volunteer-service
+
+  - patch: |-
+      apiVersion: external-secrets.io/v1
+      kind: ExternalSecret
+      metadata:
+        name: ngo-service-secrets
+        namespace: solidarytech
+      spec:
+        data:
+          - secretKey: DATABASE_URL
+            remoteRef:
+              key: solidarytech/dr/ngo-service/database-url
+              property: DATABASE_URL
+
+  - patch: |-
+      apiVersion: external-secrets.io/v1
+      kind: ExternalSecret
+      metadata:
+        name: donation-service-secrets
+        namespace: solidarytech
+      spec:
+        data:
+          - secretKey: DATABASE_URL
+            remoteRef:
+              key: solidarytech/dr/donation-service/database-url
+              property: DATABASE_URL

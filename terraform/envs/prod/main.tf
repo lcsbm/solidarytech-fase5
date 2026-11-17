@@ -61,10 +61,6 @@ module "platform" {
   enable_spot_node_group = true
   spot_desired_nodes     = 2
 
-  # O ambiente primario e o dono dos repositorios ECR e replica para o DR.
-  create_ecr             = true
-  ecr_replication_region = var.dr_region
-
   rds_backup_retention_days = 7
   dynamodb_enable_pitr      = true
 }

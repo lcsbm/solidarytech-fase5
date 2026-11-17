@@ -1,0 +1,81 @@
+name: Terraform — Bootstrap
+
+# Cria o que todos os outros workflows pressupõem: o bucket de state e a role
+# de push no ECR. Roda uma vez; depois, só para corrigir drift (é idempotente).
+#
+# Único pré-requisito fora do git: a role SolidaryTech-CICD-terraform, que este
+# job assume. Ver terraform/bootstrap/seed/README.md para o porquê.
+#
+# Ovo-e-galinha do state: o bucket onde o state mora é criado por este apply.
+# Na primeira execução, o backend.tf é posto de lado, o apply roda com state
+# local, e — com o bucket já existindo — o state é migrado para dentro dele no
+# mesmo job. Nas execuções seguintes o backend S3 é usado desde o início.
+on:
+  workflow_dispatch:
+
+env:
+  TF_VERSION: '1.13.3'
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::603727984890:role/SolidaryTech-CICD-terraform
+  STATE_BUCKET: solidarytech-tfstate
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: bootstrap
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: terraform/bootstrap
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verifica se o bucket de state já existe
+        id: bucket
+        run: |
+          if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            echo "exists=true"  >> "$GITHUB_OUTPUT"
+            echo "Bucket existe — apply com state remoto."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Bucket não existe — primeira execução."
+          fi
+
+      - name: Primeira execução — apply local e migração do state
+        if: steps.bucket.outputs.exists == 'false'
+        run: |
+          mv backend.tf backend.tf.off
+          terraform init -input=false
+          terraform apply -input=false -auto-approve
+
+          mv backend.tf.off backend.tf
+          terraform init -input=false -migrate-state -force-copy
+          echo "State migrado para s3://$STATE_BUCKET/bootstrap/terraform.tfstate"
+
+      # Se a primeira execução criou o bucket mas falhou antes de migrar, esta
+      # etapa tenta recriar o bucket e falha. Recuperação: terraform import do
+      # bucket neste state, uma vez.
+      - name: Execuções seguintes — apply com state remoto
+        if: steps.bucket.outputs.exists == 'true'
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve
+
+      - name: Outputs
+        run: terraform output -no-color

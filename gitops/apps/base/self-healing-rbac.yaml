@@ -1,0 +1,30 @@
+# Autoriza o relay de self-healing (namespace monitoring) a sanear pods aqui.
+# Fica em gitops/apps, e nao em monitoring, para ser aplicado pela mesma
+# Application que cria o namespace solidarytech — evita a corrida em que a
+# Role e criada antes do namespace existir.
+#
+# list: localizar os pods do servico alertado. delete: remover os que nao
+# estao Ready. Nada mais — nem get, nem patch, nem acesso a outros recursos.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: self-healing-relay
+  namespace: solidarytech
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: self-healing-relay
+  namespace: solidarytech
+subjects:
+  - kind: ServiceAccount
+    name: self-healing-relay
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: self-healing-relay
+  apiGroup: rbac.authorization.k8s.io

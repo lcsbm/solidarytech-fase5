@@ -24,9 +24,9 @@ Como um incidente nasce, é tratado e se encerra na plataforma. O objetivo do de
                            ▼
 ┌─ REMEDIAÇÃO ─────────────────────────────────────────────────────────┐
 │  AUTOMÁTICA                          │  MANUAL                        │
-│  relay ──► GitHub Actions            │  On-call investiga:            │
-│  kubectl rollout restart             │  Traces (NR) → Logs (Loki)     │
-│  ~90 segundos                        │  → Dashboard SRE               │
+│  relay ──► API do Kubernetes         │  On-call investiga:            │
+│  remove pods fora de Ready           │  Traces (NR) → Logs (Loki)     │
+│  ~10 segundos                        │  → Dashboard SRE               │
 └──────────────────────────┬───────────────────────────────────────────┘
                            ▼
 ┌─ VERIFICAÇÃO ────────────────────────────────────────────────────────┐
@@ -66,7 +66,7 @@ A severidade define o canal — e, principalmente, se alguém é acordado:
 | `warning` | Discord `#alerts` | Tratado em horário comercial | 1 dia útil |
 
 Alertas `critical` disparam **em paralelo** a paginação humana e a remediação
-automática. Não se espera o humano para tentar o restart.
+automática. Não se espera o humano para tentar a remediação.
 
 ---
 
@@ -75,19 +75,24 @@ automática. Não se espera o humano para tentar o restart.
 ### Caminho automático
 
 O `self-healing-relay` recebe o webhook, extrai o serviço do label `service` do alerta,
-valida contra a allowlist e dispara o workflow `self-healing.yml`:
+valida contra a allowlist e remove, pela API do Kubernetes, os pods daquele serviço
+que não estão `Ready`. O Deployment os recria na hora. Pods saudáveis não são tocados.
 
 ```
-Alerta FIRING → relay (valida) → GitHub Actions → OIDC → kubectl rollout restart
+Alerta FIRING → relay (valida) → API do Kubernetes → delete dos pods fora de Ready → Deployment recria
 ```
+
+Sem credencial externa: o relay usa o token do próprio ServiceAccount, rotacionado
+pelo kubelet, com RBAC restrito a `list` e `delete` de pods no namespace da aplicação.
+Não depende do GitHub estar no ar durante o incidente.
 
 Cobre a classe de falha mais comum: pod travado, memory leak, deadlock de conexão.
-Um restart resolve e devolve o serviço em ~90 segundos.
+A substituição devolve o serviço em ~10 segundos.
 
 ### Caminho manual
 
-Quando o restart não resolve, o on-call investiga na ordem que estreita o problema
-mais rápido:
+Quando a substituição não resolve, o on-call investiga na ordem que estreita o
+problema mais rápido:
 
 1. **Dashboard SRE** — qual SLI quebrou e há quanto tempo
 2. **Traces no New Relic** — qual span consome o tempo ou retorna erro
@@ -151,7 +156,7 @@ pergunta seguinte é por que o sistema permitiu o erro.
 | Detecção | Até alguém notar / reclamação | 1 min (regra Grafana) |
 | Notificação | Manual, por canal informal | Segundos (PagerDuty) |
 | Diagnóstico | Login no servidor, grep em log | Traces + logs correlacionados |
-| Remediação | Comando manual do on-call | ~90 s (restart automático) |
+| Remediação | Comando manual do on-call | ~10 s (substituição automática dos pods) |
 | **MTTR típico** | **30–60 min** | **~5 min** |
 
 O ganho não vem de um componente único, mas de nenhuma etapa esperar por um humano

@@ -1,0 +1,67 @@
+# Aplica o schema no RDS como hook do ArgoCD — ver comentario equivalente em
+# gitops/apps/ngo-service/db-schema.yaml.
+#
+# Fonte: services/donation-service/db/init.sql — manter os dois identicos.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: donation-service-schema
+  namespace: solidarytech
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS donations (
+        id SERIAL PRIMARY KEY,
+        ngo_id INT NOT NULL,
+        amount NUMERIC(10, 2) NOT NULL,
+        donor_name VARCHAR(100) NOT NULL,
+        status VARCHAR(20) NOT NULL, -- Ex: APPROVED, PENDING
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: donation-service-schema
+  namespace: solidarytech
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: psql
+          image: postgres:15-alpine
+          command: ["psql", "$(DATABASE_URL)", "-v", "ON_ERROR_STOP=1", "-f", "/sql/init.sql"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: donation-service-secrets
+                  key: DATABASE_URL
+          volumeMounts:
+            - name: schema
+              mountPath: /sql
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: schema
+          configMap:
+            name: donation-service-schema

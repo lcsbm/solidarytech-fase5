@@ -46,18 +46,25 @@ O `donation-service` é o caminho crítico: é sobre ele que os SLOs são defini
 ## Estrutura do repositório
 
 ```
-├── services/              Código dos 3 microsserviços + Dockerfiles
+├── services/                   Código dos 3 microsserviços + Dockerfiles
 ├── terraform/
-│   ├── modules/platform/  Módulo único que descreve toda a plataforma
+│   ├── bootstrap/              Bucket de state e role de push no ECR
+│   │   └── seed/               A única role criada fora de um workflow — inputs versionados
+│   ├── modules/
+│   │   ├── platform/           Toda a plataforma de um ambiente: EKS, RDS, SQS, add-ons
+│   │   └── registry/           Repositórios ECR de uma região
 │   └── envs/
-│       ├── prod/          us-east-1 — ambiente primário
-│       └── dr/            us-east-2 — warm standby (mesmo módulo)
+│       ├── registry/           ECR nas duas regiões + replicação — state e aprovação próprios
+│       ├── prod/               us-east-1 — ambiente primário
+│       └── dr/                 us-east-2 — warm standby (mesmo módulo)
 ├── gitops/
-│   ├── apps/              Manifestos dos serviços (ArgoCD sincroniza)
-│   ├── monitoring/        Regras de SLO e Error Budget
-│   └── bootstrap/         App-of-Apps do ArgoCD
-├── .github/workflows/     CI/CD com Trivy (SAST/SCA) e Terraform
-└── docs/PCN.md            Plano de Continuidade de Negócios
+│   ├── apps/
+│   │   ├── base/               Manifestos dos serviços, sem host de registro
+│   │   └── overlays/{prod,dr}  ECR da região, fila, tabela, roles IRSA, secrets
+│   ├── monitoring/             Prometheus, Grafana, Loki, OTel, relay de self-healing, SLOs
+│   └── bootstrap/              App-of-Apps do ArgoCD (prod e dr)
+├── .github/workflows/          bootstrap · CI com Trivy · Terraform plan/apply · destroy
+└── docs/                       PCN · FinOps · ITSM · runbook do primeiro deploy
 ```
 
 ---
@@ -83,19 +90,19 @@ inclusive recursos criados por submódulos de terceiros:
 
 ```hcl
 Project     = "SolidaryTech"
-Environment = "Production" | "DR"
+Environment = "Production" | "DR" | "Shared" | "Bootstrap"
 CostCenter  = "NGO-Core"
 ManagedBy   = "Terraform"
 ```
 
-O pipeline [`terraform.yml`](.github/workflows/terraform.yml) falha se qualquer ambiente
+O pipeline [`terraform.yml`](.github/workflows/terraform.yml) falha se qualquer root
 deixar de declarar as 4 tags.
 
 **Otimizações aplicadas:**
 - Node group Spot para `ngo-service` e `volunteer-service` (~65% de economia)
 - NAT Gateway único em vez de um por AZ (~US$ 32/mês economizados)
 - DynamoDB em `PAY_PER_REQUEST` — sem capacidade provisionada ociosa
-- Lifecycle policy no ECR retendo apenas as 10 imagens mais recentes
+- Lifecycle policy no ECR retendo apenas as 10 imagens mais recentes, nas duas regiões
 - CI constrói apenas os serviços que mudaram
 
 ---
@@ -105,61 +112,42 @@ deixar de declarar as 4 tags.
 Estratégia **Ativo-Passivo (Warm Standby)** entre `us-east-1` e `us-east-2`, com
 **RTO de 4 horas** e **RPO de 24 horas**. Detalhes em [`docs/PCN.md`](docs/PCN.md).
 
-O ambiente espelho sobe com um comando, usando o mesmo módulo da produção:
-
-```bash
-cd terraform/envs/dr
-terraform init && terraform apply
-```
+O ambiente espelho é descrito pelo **mesmo módulo** da produção e sobe pela esteira:
+*Actions → "Terraform — Plan e Apply" → `environment: dr`*. Os manifestos do DR
+(`gitops/apps/overlays/dr`) já apontam para o ECR de us-east-2 — no desastre, nenhuma
+imagem é puxada da região caída.
 
 ---
 
 ## Como subir o ambiente
 
-A infraestrutura é provisionada **pela esteira**, não por `terraform apply` local.
-O único passo manual é o bootstrap, e ele existe por uma razão específica: a esteira
-se autentica na AWS assumindo uma role OIDC, e essa role não pode ser criada pela
-própria esteira que depende dela.
+**Nada é provisionado fora de um workflow.** A única exceção é física: um workflow não
+toca a AWS sem uma role que possa assumir, e criar essa role por workflow exigiria
+outra antes dela, indefinidamente. A regressão termina em **uma** role — a semente —,
+criada com dois comandos cujos inputs estão versionados em `terraform/bootstrap/seed/`.
+Tudo o que ela cria a partir daí é Terraform aplicado por workflow, com aprovação.
 
-### Passo 0 — Bootstrap (uma única vez, local)
+A sequência completa, com verificação em cada passo, está em
+[`docs/RUNBOOK-primeiro-deploy.md`](docs/RUNBOOK-primeiro-deploy.md). Em resumo:
 
-Cria o bucket de state e as três roles de CI/CD. É o único `terraform apply` que
-roda fora da esteira, e o único state que fica local.
+| # | O quê | Onde | Aprovação |
+|---|---|---|---|
+| 0 | Semente — role `SolidaryTech-CICD-terraform` | 2 comandos `aws iam` | — |
+| 1 | Bootstrap — bucket de state, role de push | *Terraform — Bootstrap* | environment `bootstrap` |
+| 2 | Registry — ECR nas duas regiões | *Terraform — Plan e Apply* → `registry` | environment `registry` |
+| 3 | Produção — EKS, RDS, DynamoDB, SQS, add-ons | *Terraform — Plan e Apply* → `prod` | environment `prod` |
+| 4 | Primeiras imagens | *CI — Build, Scan e Deploy* → `all` | — |
+| 5 | GitOps — `kubectl apply -f gitops/bootstrap/app-of-apps.yaml` | o único `kubectl apply` | — |
 
-```bash
-cd terraform/bootstrap
-terraform init
-terraform apply
-```
+O bootstrap resolve sozinho o ovo-e-galinha do state: na primeira execução aplica com
+state local, cria o bucket e migra o próprio state para dentro dele. Nenhum `apply`
+dispara sozinho — todos passam pelo *environment* protegido do GitHub. Em pull request,
+o workflow só roda `plan` e publica o resultado como comentário.
 
-Depois, cadastre o secret `EKS_ADMIN_IAM_ARN` em
-*Settings > Secrets and variables > Actions*.
-
-### Passo 1 — Infraestrutura, pela esteira
-
-*Actions > "Terraform — Plan e Apply" > Run workflow* → `environment: prod`,
-`action: apply`.
-
-O `apply` nunca dispara sozinho: exige acionamento manual e passa pelo
-*environment* protegido do GitHub. Em pull request, o workflow só roda `plan` e
-publica o resultado como comentário.
-
-### Passo 2 — GitOps
-
-```bash
-aws eks update-kubeconfig --region us-east-1 --name solidarytech-production
-kubectl apply -f gitops/bootstrap/app-of-apps.yaml
-```
-
-Este é o único `kubectl apply` do projeto. A partir dele o ArgoCD assume a entrega
-dos três serviços e de toda a stack de observabilidade — deploys passam a acontecer
-por commit no repositório, nunca por comando manual.
-
-### Passo 3 — Aplicações
-
-Um push em `services/**` dispara o `ci.yml`, que testa, escaneia com Trivy, publica
-a imagem no ECR e atualiza a tag no manifesto GitOps. O ArgoCD detecta o commit e
-sincroniza.
+A partir do passo 5 o ArgoCD assume a entrega: um push em `services/**` dispara o
+`ci.yml`, que testa, escaneia com Trivy, publica a imagem e grava a tag nos dois
+overlays. O ArgoCD detecta o commit e sincroniza — deploys acontecem por commit no
+repositório, nunca por comando manual.
 
 ### Add-ons do cluster
 
@@ -174,22 +162,27 @@ instalar a si mesmo. Tudo que vem depois deles é entregue pelo ArgoCD.
 Manter EKS e RDS ligados fora das janelas de demonstração custa ~US$ 250/mês por
 ambiente. O workflow de destroy existe por razão de FinOps.
 
-*Actions > "Terraform — Destroy" > Run workflow* → escolha o ambiente e digite
+*Actions → "Terraform — Destroy" → Run workflow* → escolha o ambiente e digite
 `destroy-prod` ou `destroy-dr` como confirmação.
 
 Duas barreiras impedem um destroy acidental: a confirmação precisa casar com o
 ambiente escolhido no menu (não existe um "DESTROY" genérico), e o job passa pelo
 *environment* protegido do GitHub, que exige aprovação manual.
 
-O bucket de state e as roles de CI/CD **não** são removidos — pertencem ao bootstrap
-e sobrevivem ao ciclo de subir e derrubar a plataforma.
+O que **não** cai com o destroy, de propósito: o bucket de state e a role de push
+(bootstrap), o registro de imagens nas duas regiões (apagar imagens é ação manual e
+deliberada — por isso `registry` nem aparece no menu) e a semente.
 
 ---
 
 ## Segurança
 
+- **Uma única role** criada fora de um workflow — a semente —, com trust restrita a
+  este repositório e inputs versionados; tudo o mais é Terraform aplicado por esteira
 - Autenticação AWS por **OIDC** no CI/CD — nenhuma access key estática no repositório
 - Acesso a SQS e DynamoDB por **IRSA**, sem credenciais no cluster
+- Self-healing pela **API do Kubernetes** com o token do próprio ServiceAccount — sem
+  PAT, sem credencial externa, sem depender do GitHub durante um incidente
 - Connection strings no **AWS Secrets Manager**, sincronizadas pelo External Secrets Operator
 - Containers rodam como não-root, com `readOnlyRootFilesystem` e todas as capabilities removidas
 - Namespace sob Pod Security Standard `restricted`

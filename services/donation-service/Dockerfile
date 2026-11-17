@@ -2,9 +2,10 @@ FROM golang:1.26-trixie AS builder
 
 WORKDIR /app
 
-# go.sum é opcional no primeiro build — go mod tidy o gera e o CI o versiona.
-COPY go.mod go.su[m] ./
-RUN go mod tidy
+# download, e não tidy: com go.sum versionado, um go.sum desatualizado deve
+# quebrar o build aqui — nunca ser resolvido em silêncio dentro da imagem.
+COPY go.mod go.sum ./
+RUN go mod download
 
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /server .

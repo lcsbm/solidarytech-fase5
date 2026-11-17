@@ -77,6 +77,13 @@ O ponto central: **as duas regiões são descritas pelo mesmo módulo Terraform*
 (`terraform/modules/platform`). A região de DR não é uma cópia manual que envelhece —
 toda mudança aplicada na produção é aplicável ao DR com os mesmos arquivos.
 
+O registro de imagens é um root à parte (`terraform/envs/registry`), com repositórios
+criados explicitamente nas duas regiões e replicação do primário para o DR. Ele
+sobrevive a derrubar qualquer cluster, e as réplicas chegam em repositórios com as
+mesmas garantias do primário — imutabilidade, scan, lifecycle e tags —, não em
+repositórios auto-criados pela replicação. Os manifestos do DR (`gitops/apps/overlays/dr`)
+já apontam para o ECR de us-east-2: no desastre, nenhuma imagem é puxada da região caída.
+
 ### Por que Warm Standby e não Ativo-Ativo
 
 Ativo-Ativo eliminaria o RTO, mas dobraria o custo de infraestrutura. Para uma ONG com
@@ -87,8 +94,13 @@ mantém o cluster de DR com **1 nó ligado** (custo de ~US$ 35/mês) e escala so
 
 ## 4. Procedimento de ativação do DR
 
-Pré-requisito: a decisão de acionar o DR cabe ao responsável técnico de plantão, após
+Pré-requisito de decisão: acionar o DR cabe ao responsável técnico de plantão, após
 confirmar que a indisponibilidade do primário excede 1 hora sem previsão de retorno.
+
+Pré-requisito técnico, mantido em regime normal: as quatro secrets manuais (`grafana`,
+`pagerduty`, `discord`, `new-relic`) replicadas para us-east-2 —
+`aws secretsmanager replicate-secret-to-regions --secret-id solidarytech/<nome> --add-replica-regions Region=us-east-2`.
+As connection strings do RDS de DR o próprio Terraform cria na região.
 
 **Passo 1 — Escalar o cluster de DR.** Pela esteira, para que a ação fique registrada
 no histórico do GitHub Actions e auditável no post-mortem:
@@ -105,11 +117,13 @@ aws rds restore-db-instance-from-db-snapshot \
   --db-snapshot-identifier <snapshot-mais-recente>
 ```
 
-**Passo 3 — Sincronizar as aplicações** no cluster de DR:
+**Passo 3 — Sincronizar as aplicações** no cluster de DR. O app-of-apps de DR aponta
+para o overlay `gitops/apps/overlays/dr`: ECR de us-east-2, fila, tabela, roles e
+secrets da região. O monitoring é idêntico ao de produção.
 
 ```bash
 aws eks update-kubeconfig --region us-east-2 --name solidarytech-dr
-kubectl apply -f gitops/bootstrap/app-of-apps.yaml
+kubectl apply -f gitops/bootstrap/app-of-apps-dr.yaml
 ```
 
 **Passo 4 — Validar:**

@@ -48,11 +48,6 @@ output "sqs_dlq_url" {
   value       = aws_sqs_queue.donations_dlq.url
 }
 
-output "ecr_repository_urls" {
-  description = "URLs dos repositorios ECR (vazio quando create_ecr = false)"
-  value       = { for k, v in aws_ecr_repository.this : k => v.repository_url }
-}
-
 output "irsa_role_arns" {
   description = "ARNs das roles IRSA — usados nas annotations dos ServiceAccounts"
   value = {
