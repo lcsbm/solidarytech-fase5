@@ -16,7 +16,7 @@ onde é fácil esquecer de propagar tags manualmente:
 | Tag | Valor | Para que serve |
 |---|---|---|
 | `Project` | `SolidaryTech` | Separa esta plataforma de outras cargas na conta |
-| `Environment` | `Production` \| `DR` | Permite comparar o custo do DR com o da produção |
+| `Environment` | `Production` \| `DR` \| `Shared` \| `Bootstrap` | Separa produção, DR, o registro de imagens (compartilhado pelos dois) e o bootstrap |
 | `CostCenter` | `NGO-Core` | Agrupa o gasto no centro de custo da operação |
 | `ManagedBy` | `Terraform` | Identifica recursos órfãos criados fora da IaC |
 

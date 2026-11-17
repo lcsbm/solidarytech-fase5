@@ -12,47 +12,55 @@ repositório publicado. Cada passo termina com uma verificação; não avance se
   mora na trust policy dela, não no provider OIDC, que é único por conta e fica
 
 **Convenções**: comandos em bash (Git Bash no Windows), executados na raiz do
-repositório salvo indicação. Nada de `terraform apply` ou `kubectl apply` fora do
-que está escrito aqui — a esteira é o caminho.
+repositório salvo indicação. **Nada é provisionado fora de um workflow** — com uma
+única exceção, física, explicada no passo 0.
 
 ---
 
-## 0. Bootstrap — o único apply local
+## 0. A semente — a única coisa criada fora de um workflow
 
-Cria o bucket de state e as três roles que a esteira assume. É o único Terraform
-aplicado fora do GitHub Actions, porque é ele que cria a role de que a esteira
-depende. Idempotente: se já foi aplicado, o `apply` responde `No changes`.
+Nenhum workflow toca a AWS sem uma role que ele possa assumir. Criar essa role por
+workflow exigiria outra role antes dela, indefinidamente. A regressão termina em
+**uma** role, criada com dois comandos cujos inputs estão versionados em
+`terraform/bootstrap/seed/`:
 
 ```bash
-cd terraform/bootstrap
-terraform init
-terraform plan      # 10 recursos: bucket + 3 configs, 3 roles, 2 policies, 1 attachment. Zero OIDC provider.
-terraform apply
-cd ../..
+aws iam create-role \
+  --role-name SolidaryTech-CICD-terraform \
+  --assume-role-policy-document file://terraform/bootstrap/seed/trust-policy.json \
+  --max-session-duration 7200 \
+  --tags Key=Project,Value=SolidaryTech Key=Environment,Value=Bootstrap Key=CostCenter,Value=NGO-Core Key=ManagedBy,Value=Seed
+
+aws iam attach-role-policy \
+  --role-name SolidaryTech-CICD-terraform \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
 ```
+
+A trust confia apenas em `lcsbm/solidarytech-fase5`, nos dois formatos de `sub` que o
+GitHub pode emitir. Tudo o que esta role cria daqui em diante é Terraform aplicado por
+workflow. Ela não entra em state algum: existe antes dele.
 
 **Verificação**
 
 ```bash
-aws iam get-role --role-name SolidaryTech-CICD-terraform --query Role.MaxSessionDuration   # 7200
-aws s3api get-bucket-versioning --bucket solidarytech-tfstate --query Status                # "Enabled"
+aws iam get-role --role-name SolidaryTech-CICD-terraform --query '[Role.MaxSessionDuration, Role.AssumeRolePolicyDocument.Statement[0].Condition.StringLike]'
 ```
 
 ---
 
 ## 1. Levar o código para a `main`
 
-A `main` precisa conter o bootstrap com trust de dois formatos, o `go.sum` do
-`donation-service`, os Jobs de schema e os workflows corrigidos. No momento desta
+Os workflows só existem para o GitHub quando estão na `main`. No momento desta
 escrita, isso significa mergear dois PRs, **nesta ordem**:
 
 ```bash
 git push -u origin fix/ci-sarif-upload-private-repo    # 1º — corrige o CI que os demais PRs usam
-git push -u origin chore/first-deploy-prep             # 2º
+git push -u origin chore/first-deploy-prep             # 2º — bootstrap, registry, overlays, go.sum, schema, runbook
 ```
 
 **Verificação**: em cada PR, `validate`, `finops-policy`, `test` e `security-scan`
-verdes. O job `plan` do segundo PR passa porque a role do passo 0 já existe.
+verdes. O job `plan` do segundo PR falha — esperado: o bucket de state ainda não
+existe. Ele passa a partir do passo 3a.
 
 ---
 
@@ -66,42 +74,74 @@ verdes. O job `plan` do segundo PR passa porque a role do passo 0 já existe.
 
 **2b. Environments** — *Settings → Environments → New environment*
 
-Crie `prod` e `dr`. Em cada um, *Required reviewers* → adicione a si mesmo.
-É isso que faz `apply` e `destroy` **pararem para aprovação** em vez de rodarem
-sozinhos — e é evidência para o relatório.
+Crie **quatro**: `bootstrap`, `registry`, `prod` e `dr`. Em cada um, *Required
+reviewers* → adicione a si mesmo. É isso que faz cada `apply` e `destroy` **parar
+para aprovação** em vez de rodar sozinho — e é evidência para o relatório.
 
-**Verificação**: *Settings → Environments* lista `prod` e `dr`, cada um com 1 reviewer.
+**Verificação**: *Settings → Environments* lista os quatro, cada um com 1 reviewer.
 
 ---
 
-## 3. Provisionar a infraestrutura — pela esteira
+## 3. Provisionar — três workflows, nesta ordem
+
+### 3a. Bootstrap — bucket de state e role de push no ECR
+
+*Actions → "Terraform — Bootstrap" → Run workflow*. Aprove no environment.
+
+Na primeira execução o job aplica com state local, cria o bucket e migra o próprio
+state para dentro dele. Nas seguintes, usa o S3 direto. Leva ~1 min.
+
+**Verificação**
+
+```bash
+aws s3api get-bucket-versioning --bucket solidarytech-tfstate --query Status     # "Enabled"
+aws s3 ls s3://solidarytech-tfstate/bootstrap/                                   # terraform.tfstate
+aws iam get-role --role-name SolidaryTech-CICD-ecr-push --query Role.Arn
+```
+
+### 3b. Registry — ECR nas duas regiões
+
+*Actions → "Terraform — Plan e Apply" → Run workflow* → `environment: registry`,
+`action: apply`. Aprove. Leva ~1 min.
+
+Cria os 3 repositórios em us-east-1 **e** em us-east-2 com as mesmas garantias, e a
+replicação do primário para o DR. Tem state e aprovação próprios porque sobrevive a
+subir e derrubar qualquer cluster.
+
+**Verificação**
+
+```bash
+aws ecr describe-repositories --region us-east-1 --query "repositories[].repositoryName"   # 3 solidarytech/*
+aws ecr describe-repositories --region us-east-2 --query "repositories[].repositoryName"   # os mesmos 3
+aws ecr describe-registry --query "replicationConfiguration.rules[0].destinations[0].region"  # "us-east-2"
+```
+
+### 3c. Produção — EKS, RDS, DynamoDB, SQS e add-ons
 
 *Actions → "Terraform — Plan e Apply" → Run workflow* → `environment: prod`,
-`action: apply`.
-
-O job `apply` para na aprovação do environment; aprove. Leva 25–40 min
-(EKS ~15, RDS ~10, add-ons ~5). **Enquanto roda, faça o passo 4.**
+`action: apply`. Aprove. Leva 25–40 min (EKS ~15, RDS ~10, add-ons ~5).
+**Enquanto roda, faça o passo 4.**
 
 **Verificação**
 
 ```bash
 aws eks describe-cluster --name solidarytech-production --query cluster.status            # "ACTIVE"
-aws ecr describe-repositories --query "repositories[].repositoryName"                     # 3 repos solidarytech/*
 aws secretsmanager list-secrets \
   --query "SecretList[?starts_with(Name,'solidarytech/production')].Name"                 # 2 database-url
 ```
 
 **Depois do primeiro sucesso**: no CloudTrail, o evento `AssumeRoleWithWebIdentity`
 da role `SolidaryTech-CICD-terraform` mostra qual formato de `sub` o GitHub emitiu
-(com ou sem IDs numéricos). Remova o outro de `local.repo_subjects` em
-`terraform/bootstrap/main.tf` e reaplique o bootstrap — a trust fica restrita ao
-formato real.
+(com ou sem IDs numéricos). Remova o outro de `terraform/bootstrap/seed/trust-policy.json`
+e de `local.repo_subjects` em `terraform/bootstrap/main.tf`, atualize a semente com
+`aws iam update-assume-role-policy` e reaplique o bootstrap — as trusts ficam restritas
+ao formato real.
 
 ---
 
 ## 4. Secrets Manager — os quatro que o Terraform não cria
 
-Os dois `database-url` já existem, criados no passo 3 com senha gerada pelo
+Os dois `database-url` já existem, criados no passo 3c com senha gerada pelo
 Terraform. Estes quatro guardam credenciais de terceiros: criados à mão, nunca
 versionados.
 
@@ -131,10 +171,10 @@ aws secretsmanager list-secrets --query "SecretList[?starts_with(Name,'solidaryt
 
 *Actions → "CI — Build, Scan e Deploy" → Run workflow* → `service: all`.
 
-Constrói, escaneia e publica as 3 imagens no ECR, e commita as tags reais nos
-manifestos. Fazer isso **antes** do passo 6 evita que o ArgoCD tente puxar
-`:latest`, que não existe (o ECR é `IMMUTABLE`): a primeira sincronização já
-encontra imagens válidas.
+Constrói, escaneia e publica as 3 imagens no ECR primário (a replicação as copia
+para o DR), e grava as tags reais nos dois overlays Kustomize. Fazer isso **antes**
+do passo 6 evita que o ArgoCD tente puxar `:latest`, que não existe (o ECR é
+`IMMUTABLE`): a primeira sincronização já encontra imagens válidas.
 
 **Verificação**
 
@@ -143,6 +183,7 @@ for s in ngo-service donation-service volunteer-service; do
   aws ecr describe-images --repository-name solidarytech/$s --query "imageDetails[].imageTags" --output text
 done
 git pull && git log --oneline -3    # 3 commits "deploy(<service>): <sha> [skip ci]"
+grep newTag gitops/apps/overlays/prod/kustomization.yaml    # 3 tags = os SHAs acima
 ```
 
 ---
@@ -207,21 +248,22 @@ New Relic: *APM & Services* lista os 3 serviços após o primeiro tráfego; o
 
 ## 8. Depois do primeiro deploy
 
-- **Trust policy**: restringir ao formato de `sub` real — fim do passo 3.
-- **State do bootstrap**: migrar para o bucket. Descomente o bloco `backend "s3"`
-  em `terraform/bootstrap/main.tf` e rode `terraform init -migrate-state`. Sem
-  isso, perder a máquina é perder o rastreamento das roles.
+- **Trust policy**: restringir ao formato de `sub` real — fim do passo 3c.
 - **Branches locais** já mergeadas: `git branch -d fix/trivy-action-version feat/cluster-addons-and-destroy`.
 - **Branch protection** em `main`, se quiser: o CI commita o bump de tag na `main`
   por design (`[skip ci]`); o `github-actions[bot]` precisa de bypass.
+- **DR**: para manter o warm standby de fato aquecido, aplique `environment: dr` pela
+  esteira e replique as quatro secrets manuais para us-east-2 — ver `docs/PCN.md`.
 
 ---
 
 ## Derrubar
 
 *Actions → "Terraform — Destroy" → Run workflow* → `environment: prod`,
-confirmação `destroy-prod`. Passa pela aprovação do environment. Bucket de state
-e roles permanecem — pertencem ao bootstrap.
+confirmação `destroy-prod`. Passa pela aprovação do environment.
 
-Para o DR: mesmo workflow, `environment: dr`, confirmação `destroy-dr`. O DR só
-existe se foi aplicado (`Terraform — Plan e Apply` com `environment: dr`).
+Para o DR: mesmo workflow, `environment: dr`, confirmação `destroy-dr`.
+
+O que **não** cai com o destroy, de propósito: o bucket de state e a role de push
+(bootstrap), o registro de imagens nas duas regiões (registry — apagar imagens é
+ação manual e deliberada) e a semente.
