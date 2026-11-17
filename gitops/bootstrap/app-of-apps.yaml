@@ -15,10 +15,8 @@ spec:
   source:
     repoURL: https://github.com/lcsbm/solidarytech-fase5.git
     targetRevision: main
-    path: gitops/apps
-
-    directory:
-      recurse: true
+    # Overlay Kustomize da producao: o ArgoCD detecta o kustomization.yaml.
+    path: gitops/apps/overlays/prod
 
   destination:
     server: https://kubernetes.default.svc

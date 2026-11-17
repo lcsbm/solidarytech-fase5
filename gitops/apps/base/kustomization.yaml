@@ -1,0 +1,21 @@
+# Base: tudo que e igual entre producao e DR. As imagens vem sem host de
+# registro — cada overlay aponta para o ECR da propria regiao e fixa a tag.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - cluster-secret-store.yaml
+  - ingress.yaml
+  - self-healing-rbac.yaml
+  - ngo-service/deployment.yaml
+  - ngo-service/service.yaml
+  - ngo-service/config.yaml
+  - ngo-service/db-schema.yaml
+  - donation-service/deployment.yaml
+  - donation-service/service.yaml
+  - donation-service/config.yaml
+  - donation-service/db-schema.yaml
+  - volunteer-service/deployment.yaml
+  - volunteer-service/service.yaml
+  - volunteer-service/config.yaml

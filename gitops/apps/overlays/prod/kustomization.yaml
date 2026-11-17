@@ -1,0 +1,18 @@
+# Producao (us-east-1). A base ja descreve a producao; este overlay so liga as
+# imagens ao ECR da regiao e fixa a tag — que o CI atualiza a cada build.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: solidarytech/ngo-service
+    newName: 603727984890.dkr.ecr.us-east-1.amazonaws.com/solidarytech/ngo-service
+    newTag: latest
+  - name: solidarytech/donation-service
+    newName: 603727984890.dkr.ecr.us-east-1.amazonaws.com/solidarytech/donation-service
+    newTag: latest
+  - name: solidarytech/volunteer-service
+    newName: 603727984890.dkr.ecr.us-east-1.amazonaws.com/solidarytech/volunteer-service
+    newTag: latest

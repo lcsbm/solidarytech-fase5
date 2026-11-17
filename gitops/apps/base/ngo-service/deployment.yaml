@@ -51,7 +51,7 @@ spec:
                     values: ["burstable"]
       containers:
         - name: ngo-service
-          image: 603727984890.dkr.ecr.us-east-1.amazonaws.com/solidarytech/ngo-service:latest
+          image: solidarytech/ngo-service:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

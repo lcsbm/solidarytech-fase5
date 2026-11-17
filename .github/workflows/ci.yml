@@ -197,24 +197,26 @@ jobs:
         run: |
           docker push "$ECR_REGISTRY/$ECR_NAMESPACE/${{ matrix.service }}:${{ steps.meta.outputs.tag }}"
 
-      # GitOps: o commit na manifest e o que dispara o deploy. O ArgoCD observa
-      # este repositorio e sincroniza — nenhum kubectl apply manual no pipeline.
-      - name: Atualiza a tag no manifesto GitOps
+      # GitOps: a tag e gravada nos dois overlays — o DR sempre carrega a versao
+      # que esta em producao. O ArgoCD observa o repositorio e sincroniza;
+      # nenhum kubectl apply no pipeline.
+      - name: Atualiza a tag nos overlays Kustomize
         run: |
-          MANIFEST="gitops/apps/${{ matrix.service }}/deployment.yaml"
-          IMAGE="$ECR_REGISTRY/$ECR_NAMESPACE/${{ matrix.service }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          IMG="$ECR_NAMESPACE/${{ matrix.service }}"
+          for overlay in prod dr; do
+            yq -i "(.images[] | select(.name == \"$IMG\")).newTag = \"$TAG\""               "gitops/apps/overlays/$overlay/kustomization.yaml"
+          done
 
-          sed -i "s|image: ${IMAGE}:.*|image: ${IMAGE}:${{ steps.meta.outputs.tag }}|" "$MANIFEST"
-
-          if git diff --quiet -- "$MANIFEST"; then
-            echo "Manifesto ja aponta para a tag ${{ steps.meta.outputs.tag }}."
+          if git diff --quiet -- gitops/apps/overlays; then
+            echo "Overlays ja apontam para a tag $TAG."
             exit 0
           fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$MANIFEST"
-          git commit -m "deploy(${{ matrix.service }}): ${{ steps.meta.outputs.tag }} [skip ci]"
+          git add gitops/apps/overlays
+          git commit -m "deploy(${{ matrix.service }}): $TAG [skip ci]"
 
           git pull --rebase origin main
           git push origin HEAD:main

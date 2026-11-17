@@ -1,0 +1,67 @@
+# App-of-Apps do cluster de DR (us-east-2). Aplicado durante a ativacao do
+# PCN, depois do terraform apply do ambiente dr:
+#
+#   aws eks update-kubeconfig --region us-east-2 --name solidarytech-dr
+#   kubectl apply -f gitops/bootstrap/app-of-apps-dr.yaml
+#
+# Unica diferenca para o de producao: o overlay. O monitoring e identico.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: solidarytech-apps
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/lcsbm/solidarytech-fase5.git
+    targetRevision: main
+    path: gitops/apps/overlays/dr
+
+  destination:
+    server: https://kubernetes.default.svc
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: solidarytech-monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/lcsbm/solidarytech-fase5.git
+    targetRevision: main
+    path: gitops/monitoring
+
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
