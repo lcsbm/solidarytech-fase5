@@ -18,10 +18,6 @@ output "sqs_queue_url" {
   value = module.platform.sqs_queue_url
 }
 
-output "ecr_repository_urls" {
-  value = module.platform.ecr_repository_urls
-}
-
 output "irsa_role_arns" {
   description = "ARNs para as annotations eks.amazonaws.com/role-arn nos ServiceAccounts"
   value       = module.platform.irsa_role_arns

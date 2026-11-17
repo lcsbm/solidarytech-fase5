@@ -8,6 +8,8 @@ name: Terraform — Destroy
 on:
   workflow_dispatch:
     inputs:
+      # registry nao esta aqui de proposito: apagar o registro apaga todas as
+      # imagens das duas regioes. E acao manual e deliberada, fora deste workflow.
       environment:
         description: 'Ambiente a destruir'
         required: true

@@ -68,9 +68,6 @@ module "platform" {
   # garantida, e instancias Spot podem ser interrompidas pela AWS.
   enable_spot_node_group = false
 
-  # O ECR vive no primario e replica para ca — nao recriar aqui.
-  create_ecr = false
-
   rds_backup_retention_days = 7
   dynamodb_enable_pitr      = true
 }

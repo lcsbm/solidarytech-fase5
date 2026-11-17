@@ -14,7 +14,7 @@ on:
         required: true
         default: prod
         type: choice
-        options: [prod, dr]
+        options: [prod, dr, registry]
       action:
         description: 'Acao a executar'
         required: true
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [prod, dr]
+        env: [prod, dr, registry]
     steps:
       - uses: actions/checkout@v4
 

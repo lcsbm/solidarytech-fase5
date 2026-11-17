@@ -117,25 +117,6 @@ variable "rds_backup_retention_days" {
   default     = 7
 }
 
-# ── ECR ──
-variable "create_ecr" {
-  description = "Cria os repositórios ECR. Apenas o ambiente primário cria; o DR consome via replicação"
-  type        = bool
-  default     = false
-}
-
-variable "ecr_replication_region" {
-  description = "Região destino da replicação do ECR (DR). Vazio desabilita a replicação"
-  type        = string
-  default     = ""
-}
-
-variable "services" {
-  description = "Microsserviços da plataforma — usado para ECR e secrets"
-  type        = list(string)
-  default     = ["ngo-service", "donation-service", "volunteer-service"]
-}
-
 # ── DynamoDB ──
 variable "dynamodb_enable_pitr" {
   description = "Point-in-Time Recovery no DynamoDB — reduz o RPO para ~5 minutos"
