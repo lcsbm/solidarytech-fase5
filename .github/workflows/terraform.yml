@@ -184,6 +184,8 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::603727984890:role/SolidaryTech-CICD-terraform
           aws-region: ${{ env.AWS_REGION }}
+          # Sessao de 2h: o apply pode passar de 1h em retries do EKS.
+          role-duration-seconds: 7200
 
       - name: Init
         working-directory: terraform/envs/${{ inputs.environment }}

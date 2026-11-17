@@ -141,6 +141,11 @@ resource "aws_iam_role" "terraform" {
   name               = "${var.role_prefix}-terraform"
   description        = "Role assumida pelo workflow terraform.yml para provisionar a plataforma"
   assume_role_policy = data.aws_iam_policy_document.github_assume_role.json
+
+  # 2h: o destroy — duas passadas mais a limpeza de finalizers — pode passar
+  # de 1h, e o token do OIDC expiraria no meio. O apply do EKS cabe em 1h,
+  # mas usa o mesmo teto por simplicidade.
+  max_session_duration = 7200
 }
 
 # Trade-off assumido: provisionar EKS, VPC, RDS e IAM exige permissão ampla.
