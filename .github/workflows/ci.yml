@@ -107,6 +107,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -124,9 +125,13 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '0'
 
+      # Informativo: alimenta a aba Security. Em repositorio privado sem
+      # Advanced Security o upload e recusado, por isso nao bloqueia. O gate
+      # de verdade e o step seguinte, que falha o job em CRITICAL.
       - name: Publica resultado no GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
+        continue-on-error: true
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: trivy-${{ matrix.service }}
